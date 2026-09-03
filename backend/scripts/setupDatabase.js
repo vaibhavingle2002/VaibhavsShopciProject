@@ -114,7 +114,7 @@ async function setupDatabase() {
       (3, 'MacBook Air M2', 'Lightweight laptop with M2 chip and all-day battery', 1199.99, 1299.99, 8, 1, 'Apple', 30, 'https://images.unsplash.com/photo-1517336714731-489689fd1ca8?w=400&h=400&fit=crop', 4.7, 2100),
       (4, 'Sony WH-1000XM5', 'Industry-leading noise cancelling headphones', 349.99, 399.99, 13, 1, 'Sony', 100, 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400&h=400&fit=crop', 4.6, 1500),
       (5, 'Nike Air Max 270', 'Comfortable running shoes with Max Air cushioning', 129.99, 149.99, 13, 2, 'Nike', 200, 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=400&h=400&fit=crop', 4.4, 750),
-      (6, 'Levi\'s 501 Jeans', 'Classic straight fit jeans - original since 1873', 59.99, 79.99, 25, 2, 'Levi\'s', 150, 'https://images.unsplash.com/photo-1542272604-787c3835535d?w=400&h=400&fit=crop', 4.2, 650),
+      (6, 'Levi''s 501 Jeans', 'Classic straight fit jeans - original since 1873', 59.99, 79.99, 25, 2, 'Levi''s', 150, 'https://images.unsplash.com/photo-1542272604-787c3835535d?w=400&h=400&fit=crop', 4.2, 650),
       (7, 'KitchenAid Stand Mixer', 'Professional 5-quart stand mixer for baking', 299.99, 349.99, 14, 3, 'KitchenAid', 25, 'https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?w=400&h=400&fit=crop', 4.8, 3200),
       (8, 'Dyson V15 Vacuum', 'Cordless vacuum with laser dust detection', 649.99, 749.99, 13, 3, 'Dyson', 40, 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=400&h=400&fit=crop', 4.5, 1800),
       (9, 'The Great Gatsby', 'Classic American novel by F. Scott Fitzgerald', 12.99, 15.99, 19, 4, 'Scribner', 500, 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=400&h=400&fit=crop', 4.1, 25000),
