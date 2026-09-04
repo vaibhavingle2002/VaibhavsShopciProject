@@ -1,182 +1,294 @@
-```bash
 #!/bin/bash
 
 set -e
 
-# ============================================================
-# ShopCI Docker Build & Push Script
-# ============================================================
-
-IMAGE_TAG="v1"
-
-echo "=============================================="
-echo "      ShopCI Docker Build & Push"
-echo "=============================================="
+echo "============================================================"
+echo "        ShopCI - Docker Build & Deployment"
+echo "============================================================"
 
 # ------------------------------------------------------------
-# 1. Check Docker
+# Project Directory
 # ------------------------------------------------------------
+
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$PROJECT_DIR"
+
+echo "[INFO] Project directory: $PROJECT_DIR"
+
+# ------------------------------------------------------------
+# Check Docker
+# ------------------------------------------------------------
+
+echo
+echo "============================================================"
+echo "Checking Docker..."
+echo "============================================================"
 
 if ! command -v docker >/dev/null 2>&1; then
-    echo "ERROR: Docker is not installed."
+    echo "[ERROR] Docker is not installed."
     exit 1
 fi
 
-echo "Docker found:"
-docker --version
+if ! systemctl is-active --quiet docker; then
+    echo "[INFO] Docker service is not running. Starting Docker..."
+    systemctl start docker
+fi
+
+echo "[OK] Docker is installed."
+echo "[OK] Docker service is running."
 
 # ------------------------------------------------------------
-# 2. Check Project Directories
+# Check Docker Compose
 # ------------------------------------------------------------
+
+echo
+echo "============================================================"
+echo "Checking Docker Compose..."
+echo "============================================================"
+
+if ! docker compose version >/dev/null 2>&1; then
+    echo "[ERROR] Docker Compose is not available."
+    echo "[ERROR] Please run setup.sh first."
+    exit 1
+fi
+
+echo "[OK] Docker Compose is available."
+
+# ------------------------------------------------------------
+# Check Project Files
+# ------------------------------------------------------------
+
+echo
+echo "============================================================"
+echo "Checking ShopCI project files..."
+echo "============================================================"
 
 if [ ! -d "frontend" ]; then
-    echo "ERROR: frontend directory not found."
-    echo "Run this script from the ShopCI project root."
+    echo "[ERROR] frontend directory not found."
     exit 1
 fi
 
 if [ ! -d "backend" ]; then
-    echo "ERROR: backend directory not found."
-    echo "Run this script from the ShopCI project root."
+    echo "[ERROR] backend directory not found."
     exit 1
 fi
 
-if [ ! -f "frontend/Dockerfile" ]; then
-    echo "ERROR: frontend/Dockerfile not found."
+if [ ! -f "docker-compose.yml" ]; then
+    echo "[ERROR] docker-compose.yml not found."
     exit 1
 fi
 
-if [ ! -f "backend/Dockerfile" ]; then
-    echo "ERROR: backend/Dockerfile not found."
+if [ ! -f "backend/.env" ]; then
+    echo "[ERROR] backend/.env not found."
+    echo "[INFO] Create backend/.env before running this script."
     exit 1
 fi
+
+echo "[OK] Frontend directory found."
+echo "[OK] Backend directory found."
+echo "[OK] docker-compose.yml found."
+echo "[OK] backend/.env found."
 
 # ------------------------------------------------------------
-# 3. Ask Docker Hub Credentials Every Time
+# Docker Hub Login
 # ------------------------------------------------------------
 
-echo ""
-echo "=============================================="
-echo "Docker Hub Login"
-echo "=============================================="
+echo
+echo "============================================================"
+echo "        Docker Hub Authentication"
+echo "============================================================"
 
-read -p "Docker Hub Username: " DOCKERHUB_USERNAME
+read -p "Enter Docker Hub Username: " DOCKER_USERNAME
 
-if [ -z "$DOCKERHUB_USERNAME" ]; then
-    echo "ERROR: Docker Hub username cannot be empty."
+if [ -z "$DOCKER_USERNAME" ]; then
+    echo "[ERROR] Docker Hub username cannot be empty."
     exit 1
 fi
 
-echo "Enter Docker Hub password/access token:"
-read -s DOCKERHUB_PASSWORD
-echo ""
+echo
+read -s -p "Enter Docker Hub Password / Access Token: " DOCKER_PASSWORD
+echo
 
-if [ -z "$DOCKERHUB_PASSWORD" ]; then
-    echo "ERROR: Docker Hub password/access token cannot be empty."
+if [ -z "$DOCKER_PASSWORD" ]; then
+    echo "[ERROR] Docker Hub password/token cannot be empty."
     exit 1
 fi
 
-echo "$DOCKERHUB_PASSWORD" | docker login \
-    --username "$DOCKERHUB_USERNAME" \
+echo
+echo "[INFO] Logging in to Docker Hub..."
+
+echo "$DOCKER_PASSWORD" | docker login \
+    --username "$DOCKER_USERNAME" \
     --password-stdin
 
-echo "Docker Hub login successful."
+echo "[OK] Docker Hub login successful."
 
 # ------------------------------------------------------------
-# 4. Define Images
+# Image Names
 # ------------------------------------------------------------
 
-FRONTEND_IMAGE="${DOCKERHUB_USERNAME}/shopci-frontend"
-BACKEND_IMAGE="${DOCKERHUB_USERNAME}/shopci-backend"
+FRONTEND_IMAGE="$DOCKER_USERNAME/shopci-frontend:v1"
+BACKEND_IMAGE="$DOCKER_USERNAME/shopci-backend:v1"
+
+echo
+echo "[INFO] Frontend Image: $FRONTEND_IMAGE"
+echo "[INFO] Backend Image : $BACKEND_IMAGE"
 
 # ------------------------------------------------------------
-# 5. Build Frontend
+# Build Frontend
 # ------------------------------------------------------------
 
-echo ""
-echo "=============================================="
-echo "Building Frontend Image"
-echo "=============================================="
+echo
+echo "============================================================"
+echo "        Building ShopCI Frontend Image"
+echo "============================================================"
 
 docker build \
-    -t "${FRONTEND_IMAGE}:${IMAGE_TAG}" \
+    -t "$FRONTEND_IMAGE" \
     ./frontend
 
-echo "Frontend image built successfully."
+echo "[OK] Frontend Docker image built successfully."
 
 # ------------------------------------------------------------
-# 6. Build Backend
+# Build Backend
 # ------------------------------------------------------------
 
-echo ""
-echo "=============================================="
-echo "Building Backend Image"
-echo "=============================================="
+echo
+echo "============================================================"
+echo "        Building ShopCI Backend Image"
+echo "============================================================"
 
 docker build \
-    -t "${BACKEND_IMAGE}:${IMAGE_TAG}" \
+    -t "$BACKEND_IMAGE" \
     ./backend
 
-echo "Backend image built successfully."
+echo "[OK] Backend Docker image built successfully."
 
 # ------------------------------------------------------------
-# 7. Display Images
+# Push Frontend
 # ------------------------------------------------------------
 
-echo ""
-echo "=============================================="
-echo "Docker Images"
-echo "=============================================="
+echo
+echo "============================================================"
+echo "        Pushing Frontend Image to Docker Hub"
+echo "============================================================"
 
-docker images | grep -E "shopci-frontend|shopci-backend"
+docker push "$FRONTEND_IMAGE"
 
-# ------------------------------------------------------------
-# 8. Push Frontend
-# ------------------------------------------------------------
-
-echo ""
-echo "=============================================="
-echo "Pushing Frontend Image"
-echo "=============================================="
-
-docker push "${FRONTEND_IMAGE}:${IMAGE_TAG}"
-
-echo "Frontend image pushed successfully."
+echo "[OK] Frontend image pushed successfully."
 
 # ------------------------------------------------------------
-# 9. Push Backend
+# Push Backend
 # ------------------------------------------------------------
 
-echo ""
-echo "=============================================="
-echo "Pushing Backend Image"
-echo "=============================================="
+echo
+echo "============================================================"
+echo "        Pushing Backend Image to Docker Hub"
+echo "============================================================"
 
-docker push "${BACKEND_IMAGE}:${IMAGE_TAG}"
+docker push "$BACKEND_IMAGE"
 
-echo "Backend image pushed successfully."
+echo "[OK] Backend image pushed successfully."
 
 # ------------------------------------------------------------
-# 10. Final Output
+# Validate Docker Compose
 # ------------------------------------------------------------
 
-echo ""
-echo "=============================================="
-echo "       BUILD & PUSH COMPLETED"
-echo "=============================================="
+echo
+echo "============================================================"
+echo "        Validating Docker Compose"
+echo "============================================================"
 
-echo ""
-echo "Frontend:"
-echo "  ${FRONTEND_IMAGE}:${IMAGE_TAG}"
+docker compose config >/dev/null
 
-echo ""
-echo "Backend:"
-echo "  ${BACKEND_IMAGE}:${IMAGE_TAG}"
+echo "[OK] docker-compose.yml configuration is valid."
 
-echo ""
-echo "Docker Hub Username:"
-echo "  ${DOCKERHUB_USERNAME}"
+# ------------------------------------------------------------
+# Stop Existing ShopCI Containers
+# ------------------------------------------------------------
 
-echo ""
-echo "=============================================="
-```
+echo
+echo "============================================================"
+echo "        Stopping Existing ShopCI Containers"
+echo "============================================================"
+
+docker compose down
+
+echo "[OK] Existing ShopCI containers stopped."
+
+# ------------------------------------------------------------
+# Deploy ShopCI
+# ------------------------------------------------------------
+
+echo
+echo "============================================================"
+echo "        Deploying ShopCI Application"
+echo "============================================================"
+
+docker compose up -d
+
+echo "[OK] ShopCI containers started."
+
+# ------------------------------------------------------------
+# Wait for Containers
+# ------------------------------------------------------------
+
+echo
+echo "============================================================"
+echo "        Waiting for Containers"
+echo "============================================================"
+
+sleep 10
+
+# ------------------------------------------------------------
+# Container Status
+# ------------------------------------------------------------
+
+echo
+echo "============================================================"
+echo "        ShopCI Container Status"
+echo "============================================================"
+
+docker compose ps
+
+# ------------------------------------------------------------
+# Docker Images
+# ------------------------------------------------------------
+
+echo
+echo "============================================================"
+echo "        ShopCI Docker Images"
+echo "============================================================"
+
+docker images | grep -E "shopci-frontend|shopci-backend" || true
+
+# ------------------------------------------------------------
+# Final Result
+# ------------------------------------------------------------
+
+echo
+echo "============================================================"
+echo "        ShopCI Deployment Completed"
+echo "============================================================"
+
+echo
+echo "[OK] Frontend image built."
+echo "[OK] Backend image built."
+echo "[OK] Frontend image pushed to Docker Hub."
+echo "[OK] Backend image pushed to Docker Hub."
+echo "[OK] ShopCI application deployed using Docker Compose."
+
+echo
+echo "Useful commands:"
+echo
+echo "  docker compose ps"
+echo "  docker compose logs -f"
+echo "  docker compose logs frontend"
+echo "  docker compose logs backend"
+echo "  docker compose restart"
+echo "  docker compose down"
+
+echo
+echo "============================================================"
+echo "                 ShopCI is LIVE 🚀"
+echo "============================================================"
