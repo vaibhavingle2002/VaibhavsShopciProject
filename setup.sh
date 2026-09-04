@@ -1,575 +1,216 @@
-#!/bin/bash
-
-# ============================================================
-# ShopCI - AWS DevOps Environment Setup Script
-# OS: Amazon Linux 2023
-# ============================================================
-
-set -e
-
-echo "============================================================"
-echo "        ShopCI - DevOps Environment Setup"
-echo "============================================================"
-
-# ------------------------------------------------------------
-# 1. Root Check
-# ------------------------------------------------------------
-
-if [ "$EUID" -ne 0 ]; then
-    echo "ERROR: Please run this script as root."
-    echo "Example: sudo ./setup.sh"
-    exit 1
-fi
-
-echo "[OK] Running as root."
-
-
-# ------------------------------------------------------------
-# 2. OS Check
-# ------------------------------------------------------------
-
-if [ -f /etc/os-release ]; then
-    source /etc/os-release
-else
-    echo "ERROR: Cannot detect operating system."
-    exit 1
-fi
-
-echo "[INFO] Operating System: $PRETTY_NAME"
-
-if [[ "$ID" != "amzn" ]]; then
-    echo "WARNING: This script is designed for Amazon Linux."
-fi
-
-
-# ------------------------------------------------------------
-# 3. System Update
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "Updating system packages..."
-echo "============================================================"
-
-dnf update -y
-
-
-# ------------------------------------------------------------
-# 4. Install Required Packages
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "Installing required packages..."
-echo "============================================================"
-
-dnf install -y \
-    git \
-    jq \
-    wget \
-    unzip \
-    tar \
-    gzip \
-    ca-certificates \
-    openssl
-
-echo "[OK] Required packages installed."
-
-
-# ------------------------------------------------------------
-# 5. Verify curl
-# Amazon Linux 2023 normally has curl-minimal.
-# We intentionally DO NOT install full curl.
-# ------------------------------------------------------------
-
-echo ""
-echo "Checking curl..."
-
-if command -v curl >/dev/null 2>&1; then
-    echo "[OK] curl is available."
-else
-    echo "ERROR: curl is not available."
-    exit 1
-fi
-
-
-# ------------------------------------------------------------
-# 6. Install Docker
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "Installing Docker..."
-echo "============================================================"
-
-if command -v docker >/dev/null 2>&1; then
-    echo "[INFO] Docker is already installed."
-else
-
-    dnf install -y docker
-
-    systemctl start docker
-    systemctl enable docker
-
-    echo "[OK] Docker installed."
-
-fi
-
-systemctl start docker
-systemctl enable docker
-
-echo "[OK] Docker service is running."
-
-
-# ------------------------------------------------------------
-# 7. Add Users to Docker Group
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "Configuring Docker permissions..."
-echo "============================================================"
-
-if id ec2-user >/dev/null 2>&1; then
-    usermod -aG docker ec2-user
-    echo "[OK] ec2-user added to docker group."
-fi
-
-if id "$SUDO_USER" >/dev/null 2>&1 && [ "$SUDO_USER" != "root" ]; then
-    usermod -aG docker "$SUDO_USER"
-    echo "[OK] $SUDO_USER added to docker group."
-fi
-
-
-# ------------------------------------------------------------
-# 8. Detect Architecture
-# ------------------------------------------------------------
-
-ARCH=$(uname -m)
-
-echo ""
-echo "[INFO] System Architecture: $ARCH"
-
-case "$ARCH" in
-
-    x86_64)
-        DOCKER_ARCH="amd64"
-        AWS_ARCH="x86_64"
-        KUBECTL_ARCH="amd64"
-        EKSCTL_ARCH="amd64"
-        ;;
-
-    aarch64)
-        DOCKER_ARCH="arm64"
-        AWS_ARCH="aarch64"
-        KUBECTL_ARCH="arm64"
-        EKSCTL_ARCH="arm64"
-        ;;
-
-    *)
-        echo "ERROR: Unsupported architecture: $ARCH"
-        exit 1
-        ;;
-
-esac
-
-
-# ------------------------------------------------------------
-# 9. Docker Buildx
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "Installing Docker Buildx..."
-echo "============================================================"
-
-DOCKER_CLI_PLUGIN_DIR="/usr/local/lib/docker/cli-plugins"
-
-mkdir -p "$DOCKER_CLI_PLUGIN_DIR"
-
-if docker buildx version >/dev/null 2>&1; then
-
-    echo "[INFO] Docker Buildx already installed."
-
-else
-
-    echo "[INFO] Downloading latest Docker Buildx..."
-
-    BUILDX_VERSION=$(curl -s \
-        https://api.github.com/repos/docker/buildx/releases/latest \
-        | jq -r '.tag_name')
-
-    if [ -z "$BUILDX_VERSION" ] || [ "$BUILDX_VERSION" = "null" ]; then
-        echo "ERROR: Could not determine Docker Buildx version."
-        exit 1
-    fi
-
-    wget -q \
-        -O "$DOCKER_CLI_PLUGIN_DIR/docker-buildx" \
-        "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-${DOCKER_ARCH}"
-
-    chmod +x "$DOCKER_CLI_PLUGIN_DIR/docker-buildx"
-
-    echo "[OK] Docker Buildx installed."
-
-fi
-
-
-# ------------------------------------------------------------
-# 10. Docker Compose
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "Installing Docker Compose..."
-echo "============================================================"
-
-if docker compose version >/dev/null 2>&1; then
-
-    echo "[INFO] Docker Compose already installed."
-
-else
-
-    echo "[INFO] Downloading latest Docker Compose..."
-
-    COMPOSE_VERSION=$(curl -s \
-        https://api.github.com/repos/docker/compose/releases/latest \
-        | jq -r '.tag_name')
-
-    if [ -z "$COMPOSE_VERSION" ] || [ "$COMPOSE_VERSION" = "null" ]; then
-        echo "ERROR: Could not determine Docker Compose version."
-        exit 1
-    fi
-
-    wget -q \
-        -O "$DOCKER_CLI_PLUGIN_DIR/docker-compose" \
-        "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-${DOCKER_ARCH}"
-
-    chmod +x "$DOCKER_CLI_PLUGIN_DIR/docker-compose"
-
-    echo "[OK] Docker Compose installed."
-
-fi
-
-
-# ------------------------------------------------------------
-# 11. Docker Buildx Builder
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "Configuring Docker Buildx builder..."
-echo "============================================================"
-
-if docker buildx inspect shopci-builder >/dev/null 2>&1; then
-
-    echo "[INFO] shopci-builder already exists."
-
-else
-
-    docker buildx create \
-        --name shopci-builder \
-        --use
-
-    echo "[OK] shopci-builder created."
-
-fi
-
-docker buildx use shopci-builder
-
-
-# ------------------------------------------------------------
-# 12. AWS CLI
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "Installing AWS CLI..."
-echo "============================================================"
-
-if command -v aws >/dev/null 2>&1; then
-
-    echo "[INFO] AWS CLI already installed."
-
-else
-
-    cd /tmp
-
-    rm -f awscliv2.zip
-
-    curl -sSL \
-        "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}.zip" \
-        -o awscliv2.zip
-
-    rm -rf aws
-
-    unzip -q awscliv2.zip
-
-    ./aws/install
-
-    rm -rf aws awscliv2.zip
-
-    echo "[OK] AWS CLI installed."
-
-fi
-
-
-# ------------------------------------------------------------
-# 13. kubectl
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "Installing kubectl..."
-echo "============================================================"
-
-if command -v kubectl >/dev/null 2>&1; then
-
-    echo "[INFO] kubectl already installed."
-
-else
-
-    KUBECTL_VERSION=$(curl -L -s \
-        https://dl.k8s.io/release/stable.txt)
-
-    curl -L -s \
-        -o /usr/local/bin/kubectl \
-        "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl"
-
-    chmod +x /usr/local/bin/kubectl
-
-    echo "[OK] kubectl installed."
-
-fi
-
-
-# ------------------------------------------------------------
-# 14. eksctl
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "Installing eksctl..."
-echo "============================================================"
-
-if command -v eksctl >/dev/null 2>&1; then
-
-    echo "[INFO] eksctl already installed."
-
-else
-
-    EKSCTL_VERSION=$(curl -s \
-        https://api.github.com/repos/eksctl-io/eksctl/releases/latest \
-        | jq -r '.tag_name')
-
-    if [ -z "$EKSCTL_VERSION" ] || [ "$EKSCTL_VERSION" = "null" ]; then
-        echo "ERROR: Could not determine eksctl version."
-        exit 1
-    fi
-
-    wget -q \
-        -O /tmp/eksctl.tar.gz \
-        "https://github.com/eksctl-io/eksctl/releases/download/${EKSCTL_VERSION}/eksctl_${EKSCTL_VERSION#v}_Linux_${ARCH}.tar.gz"
-
-    tar -xzf /tmp/eksctl.tar.gz -C /tmp
-
-    mv /tmp/eksctl /usr/local/bin/eksctl
-
-    chmod +x /usr/local/bin/eksctl
-
-    rm -f /tmp/eksctl.tar.gz
-
-    echo "[OK] eksctl installed."
-
-fi
-
-
-# ------------------------------------------------------------
-# 15. Helm
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "Installing Helm..."
-echo "============================================================"
-
-if command -v helm >/dev/null 2>&1; then
-
-    echo "[INFO] Helm already installed."
-
-else
-
-    HELM_VERSION=$(curl -s \
-        https://api.github.com/repos/helm/helm/releases/latest \
-        | jq -r '.tag_name')
-
-    if [ -z "$HELM_VERSION" ] || [ "$HELM_VERSION" = "null" ]; then
-        echo "ERROR: Could not determine Helm version."
-        exit 1
-    fi
-
-    wget -q \
-        -O /tmp/helm.tar.gz \
-        "https://get.helm.sh/helm-${HELM_VERSION}-linux-${DOCKER_ARCH}.tar.gz"
-
-    tar -xzf /tmp/helm.tar.gz -C /tmp
-
-    mv "/tmp/linux-${DOCKER_ARCH}/helm" /usr/local/bin/helm
-
-    chmod +x /usr/local/bin/helm
-
-    rm -rf \
-        /tmp/helm.tar.gz \
-        "/tmp/linux-${DOCKER_ARCH}"
-
-    echo "[OK] Helm installed."
-
-fi
-
-
-# ------------------------------------------------------------
-# 16. Verify Docker
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "Docker Verification"
-echo "============================================================"
-
-docker --version
-
-echo ""
+[root@Shopci-Project VaibhavsShopciProject]# chmod +x setup.sh
+[root@Shopci-Project VaibhavsShopciProject]# sh setup.sh
+============================================================
+        ShopCI - DevOps Environment Setup
+============================================================
+[OK] Running as root.
+[INFO] Operating System: Amazon Linux 2023.12.20260831
+
+============================================================
+Updating system packages...
+============================================================
+Last metadata expiration check: 0:10:19 ago on Fri Sep  4 11:13:37 2026.
+Dependencies resolved.
+Nothing to do.
+Complete!
+
+============================================================
+Installing required packages...
+============================================================
+Last metadata expiration check: 0:10:19 ago on Fri Sep  4 11:13:37 2026.
+Package git-2.50.1-1.amzn2023.0.1.x86_64 is already installed.
+Package jq-1.8.1-60.amzn2023.x86_64 is already installed.
+Package wget-1.21.3-1.amzn2023.0.5.x86_64 is already installed.
+Package unzip-6.0-68.amzn2023.0.2.x86_64 is already installed.
+Package tar-2:1.34-1.amzn2023.0.4.x86_64 is already installed.
+Package gzip-1.12-1.amzn2023.0.1.x86_64 is already installed.
+Package ca-certificates-2025.2.76-1.0.amzn2023.0.3.noarch is already installed.
+Package openssl-1:3.5.7-2.amzn2023.0.2.x86_64 is already installed.
+Dependencies resolved.
+Nothing to do.
+Complete!
+[OK] Required packages installed.
+
+Checking curl...
+[OK] curl is available.
+
+============================================================
+Installing Docker...
+============================================================
+Last metadata expiration check: 0:10:20 ago on Fri Sep  4 11:13:37 2026.
+Dependencies resolved.
+===========================================================================================================================================================================================
+ Package                                            Architecture                       Version                                               Repository                               Size
+===========================================================================================================================================================================================
+Installing:
+ docker                                             x86_64                             25.0.16-1.amzn2023.0.4                                amazonlinux                              46 M
+Installing dependencies:
+ container-selinux                                  noarch                             4:2.245.0-1.amzn2023                                  amazonlinux                              58 k
+ containerd                                         x86_64                             2.2.5-1.amzn2023.0.2                                  amazonlinux                              24 M
+ iptables-libs                                      x86_64                             1.8.8-3.amzn2023.0.2                                  amazonlinux                             401 k
+ iptables-nft                                       x86_64                             1.8.8-3.amzn2023.0.2                                  amazonlinux                             183 k
+ libcgroup                                          x86_64                             3.0-1.amzn2023.0.1                                    amazonlinux                              75 k
+ libnetfilter_conntrack                             x86_64                             1.0.8-2.amzn2023.0.2                                  amazonlinux                              58 k
+ libnfnetlink                                       x86_64                             1.0.1-19.amzn2023.0.2                                 amazonlinux                              30 k
+ libnftnl                                           x86_64                             1.2.2-2.amzn2023.0.2                                  amazonlinux                              84 k
+ pigz                                               x86_64                             2.5-1.amzn2023.0.4                                    amazonlinux                              83 k
+ runc                                               x86_64                             1.3.5-1.amzn2023.0.2                                  amazonlinux                             3.9 M
+
+Transaction Summary
+===========================================================================================================================================================================================
+Install  11 Packages
+
+Total download size: 76 M
+Installed size: 284 M
+Downloading Packages:
+(1/11): container-selinux-2.245.0-1.amzn2023.noarch.rpm                                                                                                    1.8 MB/s |  58 kB     00:00    
+(2/11): iptables-libs-1.8.8-3.amzn2023.0.2.x86_64.rpm                                                                                                       20 MB/s | 401 kB     00:00    
+(3/11): iptables-nft-1.8.8-3.amzn2023.0.2.x86_64.rpm                                                                                                       6.2 MB/s | 183 kB     00:00    
+(4/11): libcgroup-3.0-1.amzn2023.0.1.x86_64.rpm                                                                                                            1.9 MB/s |  75 kB     00:00    
+(5/11): libnetfilter_conntrack-1.0.8-2.amzn2023.0.2.x86_64.rpm                                                                                             2.4 MB/s |  58 kB     00:00    
+(6/11): libnfnetlink-1.0.1-19.amzn2023.0.2.x86_64.rpm                                                                                                      1.0 MB/s |  30 kB     00:00    
+(7/11): libnftnl-1.2.2-2.amzn2023.0.2.x86_64.rpm                                                                                                           2.7 MB/s |  84 kB     00:00    
+(8/11): pigz-2.5-1.amzn2023.0.4.x86_64.rpm                                                                                                                 3.3 MB/s |  83 kB     00:00    
+(9/11): containerd-2.2.5-1.amzn2023.0.2.x86_64.rpm                                                                                                          79 MB/s |  24 MB     00:00    
+(10/11): runc-1.3.5-1.amzn2023.0.2.x86_64.rpm                                                                                                               42 MB/s | 3.9 MB     00:00    
+(11/11): docker-25.0.16-1.amzn2023.0.4.x86_64.rpm                                                                                                           81 MB/s |  46 MB     00:00    
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Total                                                                                                                                                      124 MB/s |  76 MB     00:00     
+Running transaction check
+Transaction check succeeded.
+Running transaction test
+Transaction test succeeded.
+Running transaction
+  Preparing        :                                                                                                                                                                   1/1 
+  Installing       : runc-1.3.5-1.amzn2023.0.2.x86_64                                                                                                                                 1/11 
+  Installing       : containerd-2.2.5-1.amzn2023.0.2.x86_64                                                                                                                           2/11 
+  Running scriptlet: containerd-2.2.5-1.amzn2023.0.2.x86_64                                                                                                                           2/11 
+  Installing       : pigz-2.5-1.amzn2023.0.4.x86_64                                                                                                                                   3/11 
+  Installing       : libnftnl-1.2.2-2.amzn2023.0.2.x86_64                                                                                                                             4/11 
+  Installing       : libnfnetlink-1.0.1-19.amzn2023.0.2.x86_64                                                                                                                        5/11 
+  Installing       : libnetfilter_conntrack-1.0.8-2.amzn2023.0.2.x86_64                                                                                                               6/11 
+  Installing       : iptables-libs-1.8.8-3.amzn2023.0.2.x86_64                                                                                                                        7/11 
+  Installing       : iptables-nft-1.8.8-3.amzn2023.0.2.x86_64                                                                                                                         8/11 
+  Running scriptlet: iptables-nft-1.8.8-3.amzn2023.0.2.x86_64                                                                                                                         8/11 
+  Installing       : libcgroup-3.0-1.amzn2023.0.1.x86_64                                                                                                                              9/11 
+  Running scriptlet: container-selinux-4:2.245.0-1.amzn2023.noarch                                                                                                                   10/11 
+  Installing       : container-selinux-4:2.245.0-1.amzn2023.noarch                                                                                                                   10/11 
+  Running scriptlet: container-selinux-4:2.245.0-1.amzn2023.noarch                                                                                                                   10/11 
+  Running scriptlet: docker-25.0.16-1.amzn2023.0.4.x86_64                                                                                                                            11/11 
+  Installing       : docker-25.0.16-1.amzn2023.0.4.x86_64                                                                                                                            11/11 
+  Running scriptlet: docker-25.0.16-1.amzn2023.0.4.x86_64                                                                                                                            11/11 
+Created symlink /etc/systemd/system/sockets.target.wants/docker.socket → /usr/lib/systemd/system/docker.socket.
+
+  Running scriptlet: container-selinux-4:2.245.0-1.amzn2023.noarch                                                                                                                   11/11 
+  Running scriptlet: docker-25.0.16-1.amzn2023.0.4.x86_64                                                                                                                            11/11 
+  Verifying        : container-selinux-4:2.245.0-1.amzn2023.noarch                                                                                                                    1/11 
+  Verifying        : containerd-2.2.5-1.amzn2023.0.2.x86_64                                                                                                                           2/11 
+  Verifying        : docker-25.0.16-1.amzn2023.0.4.x86_64                                                                                                                             3/11 
+  Verifying        : iptables-libs-1.8.8-3.amzn2023.0.2.x86_64                                                                                                                        4/11 
+  Verifying        : iptables-nft-1.8.8-3.amzn2023.0.2.x86_64                                                                                                                         5/11 
+  Verifying        : libcgroup-3.0-1.amzn2023.0.1.x86_64                                                                                                                              6/11 
+  Verifying        : libnetfilter_conntrack-1.0.8-2.amzn2023.0.2.x86_64                                                                                                               7/11 
+  Verifying        : libnfnetlink-1.0.1-19.amzn2023.0.2.x86_64                                                                                                                        8/11 
+  Verifying        : libnftnl-1.2.2-2.amzn2023.0.2.x86_64                                                                                                                             9/11 
+  Verifying        : pigz-2.5-1.amzn2023.0.4.x86_64                                                                                                                                  10/11 
+  Verifying        : runc-1.3.5-1.amzn2023.0.2.x86_64                                                                                                                                11/11 
+
+Installed:
+  container-selinux-4:2.245.0-1.amzn2023.noarch   containerd-2.2.5-1.amzn2023.0.2.x86_64   docker-25.0.16-1.amzn2023.0.4.x86_64                 iptables-libs-1.8.8-3.amzn2023.0.2.x86_64  
+  iptables-nft-1.8.8-3.amzn2023.0.2.x86_64        libcgroup-3.0-1.amzn2023.0.1.x86_64      libnetfilter_conntrack-1.0.8-2.amzn2023.0.2.x86_64   libnfnetlink-1.0.1-19.amzn2023.0.2.x86_64  
+  libnftnl-1.2.2-2.amzn2023.0.2.x86_64            pigz-2.5-1.amzn2023.0.4.x86_64           runc-1.3.5-1.amzn2023.0.2.x86_64                    
+
+Complete!
+Created symlink /etc/systemd/system/multi-user.target.wants/docker.service → /usr/lib/systemd/system/docker.service.
+[OK] Docker installed.
+[OK] Docker service is running.
+
+============================================================
+Configuring Docker permissions...
+============================================================
+[OK] ec2-user added to docker group.
+
+[INFO] System Architecture: x86_64
+
+============================================================
+Installing Docker Buildx...
+============================================================
+[INFO] Docker Buildx already installed.
+
+============================================================
+Installing Docker Compose...
+============================================================
+[INFO] Downloading latest Docker Compose...
+[root@Shopci-Project VaibhavsShopciProject]# sh setup.sh
+============================================================
+        ShopCI - DevOps Environment Setup
+============================================================
+[OK] Running as root.
+[INFO] Operating System: Amazon Linux 2023.12.20260831
+
+============================================================
+Updating system packages...
+============================================================
+Last metadata expiration check: 0:11:19 ago on Fri Sep  4 11:13:37 2026.
+Dependencies resolved.
+Nothing to do.
+Complete!
+
+============================================================
+Installing required packages...
+============================================================
+Last metadata expiration check: 0:11:19 ago on Fri Sep  4 11:13:37 2026.
+Package git-2.50.1-1.amzn2023.0.1.x86_64 is already installed.
+Package jq-1.8.1-60.amzn2023.x86_64 is already installed.
+Package wget-1.21.3-1.amzn2023.0.5.x86_64 is already installed.
+Package unzip-6.0-68.amzn2023.0.2.x86_64 is already installed.
+Package tar-2:1.34-1.amzn2023.0.4.x86_64 is already installed.
+Package gzip-1.12-1.amzn2023.0.1.x86_64 is already installed.
+Package ca-certificates-2025.2.76-1.0.amzn2023.0.3.noarch is already installed.
+Package openssl-1:3.5.7-2.amzn2023.0.2.x86_64 is already installed.
+Dependencies resolved.
+Nothing to do.
+Complete!
+[OK] Required packages installed.
+
+Checking curl...
+[OK] curl is available.
+
+============================================================
+Installing Docker...
+============================================================
+[INFO] Docker is already installed.
+[OK] Docker service is running.
+
+============================================================
+Configuring Docker permissions...
+============================================================
+[OK] ec2-user added to docker group.
+
+[INFO] System Architecture: x86_64
+
+============================================================
+Installing Docker Buildx...
+============================================================
+[INFO] Docker Buildx already installed.
+
+============================================================
+Installing Docker Compose...
+============================================================
+[INFO] Downloading latest Docker Compose...
+[root@Shopci-Project VaibhavsShopciProject]# docker --version
 docker buildx version
-
-echo ""
 docker compose version
-
-
-# ------------------------------------------------------------
-# 17. Verify Docker Service
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "Docker Service Status"
-echo "============================================================"
-
-systemctl is-active docker
-
-echo ""
-docker info >/dev/null 2>&1 && \
-    echo "[OK] Docker daemon is accessible."
-
-
-# ------------------------------------------------------------
-# 18. Verify AWS CLI
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "AWS CLI Verification"
-echo "============================================================"
-
 aws --version
-
-
-# ------------------------------------------------------------
-# 19. Verify kubectl
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "kubectl Verification"
-echo "============================================================"
-
 kubectl version --client
-
-
-# ------------------------------------------------------------
-# 20. Verify eksctl
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "eksctl Verification"
-echo "============================================================"
-
 eksctl version
-
-
-# ------------------------------------------------------------
-# 21. Verify Helm
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "Helm Verification"
-echo "============================================================"
-
 helm version
-
-
-# ------------------------------------------------------------
-# 22. AWS IAM Role Verification
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "Checking AWS IAM Role..."
-echo "============================================================"
-
-if aws sts get-caller-identity >/dev/null 2>&1; then
-
-    echo "[OK] AWS credentials/IAM role detected."
-
-    aws sts get-caller-identity
-
-else
-
-    echo ""
-    echo "WARNING: AWS credentials/IAM role could not be detected."
-    echo ""
-    echo "If you are using an EC2 IAM Role, verify that:"
-    echo "1. IAM Role is attached to this EC2 instance."
-    echo "2. The role has the required permissions."
-    echo "3. Instance Metadata Service is accessible."
-    echo ""
-
-fi
-
-
-# ------------------------------------------------------------
-# 23. Final Output
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "        ShopCI Environment Setup Completed"
-echo "============================================================"
-
-echo ""
-echo "Installed/Verified:"
-echo "  ✓ Git"
-echo "  ✓ Docker"
-echo "  ✓ Docker Buildx"
-echo "  ✓ Docker Compose"
-echo "  ✓ AWS CLI"
-echo "  ✓ kubectl"
-echo "  ✓ eksctl"
-echo "  ✓ Helm"
-
-echo ""
-echo "IMPORTANT:"
-echo "Docker group permissions require a new login session."
-
-echo ""
-echo "Reconnect to EC2 Instance Connect before running:"
-echo ""
-echo "  docker ps"
-echo "  docker compose version"
-echo "  aws sts get-caller-identity"
-echo ""
-
-echo "============================================================"
-echo "              Setup Finished Successfully"
-echo "============================================================"
+Docker version 25.0.14, build 0bab007
+github.com/docker/buildx 0.12.1 30feaa1a915b869ebc2eea6328624b49facd4bfb
+docker: 'compose' is not a docker command.
+See 'docker --help'
+aws-cli/2.33.15 Python/3.9.25 Linux/6.18.44-99.149.amzn2023.x86_64 source/x86_64.amzn.2023
+-bash: kubectl: command not found
+-bash: eksctl: command not found
+-bash: helm: command not found
+[root@Shopci-Project VaibhavsShopciProject]# 
