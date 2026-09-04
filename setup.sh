@@ -1,4 +1,3 @@
-cat > ~/shopci-setup.sh <<'EOF'
 #!/bin/bash
 
 set -Eeuo pipefail
@@ -10,16 +9,6 @@ set -Eeuo pipefail
 REPO_URL="https://github.com/vaibhavingle2002/VaibhavsShopciProject.git"
 BRANCH="master"
 PROJECT_DIR="/root/VaibhavsShopciProject"
-
-# ------------------------------------------------------------
-# PINNED / REQUIRED VERSIONS
-# ------------------------------------------------------------
-
-# Buildx must be >= 0.17
-BUILDX_VERSION="v0.17.2"
-
-# Docker Compose
-COMPOSE_VERSION="v5.5.1"
 
 PLUGIN_DIR="/usr/local/lib/docker/cli-plugins"
 
@@ -81,7 +70,7 @@ echo "OS           : ${PRETTY_NAME}"
 echo "Architecture : $(uname -m)"
 
 if [[ "${ID:-}" != "amzn" ]]; then
-    warn "This script is designed for Amazon Linux."
+    warn "This script is designed for Amazon Linux 2023."
 fi
 
 
@@ -142,7 +131,7 @@ case "$ARCH" in
         KUBECTL_ARCH="amd64"
         EKSCTL_ARCH="amd64"
         HELM_ARCH="amd64"
-        AWS_CLI_ARCH="x86_64"
+        AWSCLI_ARCH="x86_64"
         ;;
 
     aarch64)
@@ -151,7 +140,7 @@ case "$ARCH" in
         KUBECTL_ARCH="arm64"
         EKSCTL_ARCH="arm64"
         HELM_ARCH="arm64"
-        AWS_CLI_ARCH="aarch64"
+        AWSCLI_ARCH="aarch64"
         ;;
 
     arm64)
@@ -160,7 +149,7 @@ case "$ARCH" in
         KUBECTL_ARCH="arm64"
         EKSCTL_ARCH="arm64"
         HELM_ARCH="arm64"
-        AWS_CLI_ARCH="aarch64"
+        AWSCLI_ARCH="aarch64"
         ;;
 
     *)
@@ -175,7 +164,7 @@ echo "Compose architecture : $COMPOSE_ARCH"
 echo "kubectl architecture : $KUBECTL_ARCH"
 echo "eksctl architecture  : $EKSCTL_ARCH"
 echo "Helm architecture    : $HELM_ARCH"
-echo "AWS CLI architecture : $AWS_CLI_ARCH"
+echo "AWS CLI architecture : $AWSCLI_ARCH"
 
 
 # ============================================================
@@ -185,10 +174,17 @@ echo "AWS CLI architecture : $AWS_CLI_ARCH"
 section "6. Installing Docker"
 
 if command -v docker >/dev/null 2>&1; then
+
     log "Docker is already installed."
+
 else
+
     log "Installing Docker..."
+
     dnf install -y docker
+
+    log "Docker installed."
+
 fi
 
 echo
@@ -207,10 +203,14 @@ systemctl start docker
 sleep 3
 
 if systemctl is-active --quiet docker; then
+
     log "Docker service is running."
+
 else
+
     systemctl status docker --no-pager
     fail "Docker service failed to start."
+
 fi
 
 
@@ -221,63 +221,69 @@ fi
 section "8. Configuring Docker Group"
 
 if id ec2-user >/dev/null 2>&1; then
+
     usermod -aG docker ec2-user
+
     log "Added ec2-user to docker group."
+
 else
-    log "ec2-user does not exist. Current user is root."
+
+    warn "ec2-user does not exist."
+
 fi
 
 
 # ============================================================
-# 9. REMOVE ALL OLD DOCKER CLI PLUGINS
+# 9. PREPARE DOCKER CLI PLUGIN DIRECTORY
 # ============================================================
 
-section "9. Removing Old Docker CLI Plugins"
+section "9. Preparing Docker CLI Plugins"
 
-# IMPORTANT:
-# Docker can discover CLI plugins from multiple locations.
-# Removing only /usr/local/lib/docker/cli-plugins is NOT enough.
-#
-# We intentionally remove old Buildx and Compose binaries from
-# common system/root plugin directories.
-
-PLUGIN_LOCATIONS=(
-    "/usr/local/lib/docker/cli-plugins"
-    "/usr/libexec/docker/cli-plugins"
-    "/usr/lib/docker/cli-plugins"
-    "/root/.docker/cli-plugins"
-)
-
-for DIR in "${PLUGIN_LOCATIONS[@]}"; do
-
-    if [ -d "$DIR" ]; then
-
-        echo "Checking: $DIR"
-
-        rm -f "$DIR/docker-buildx"
-        rm -f "$DIR/docker-compose"
-
-        log "Removed old plugins from $DIR"
-
-    fi
-
-done
-
-# Make our preferred plugin directory.
 mkdir -p "$PLUGIN_DIR"
+
+echo "Checking: $PLUGIN_DIR"
+
+rm -f "$PLUGIN_DIR/docker-buildx"
+rm -f "$PLUGIN_DIR/docker-compose"
+
+echo "Checking: /usr/libexec/docker/cli-plugins"
+
+if [ -d /usr/libexec/docker/cli-plugins ]; then
+    rm -f /usr/libexec/docker/cli-plugins/docker-buildx
+    rm -f /usr/libexec/docker/cli-plugins/docker-compose
+fi
+
+echo "Checking: /root/.docker/cli-plugins"
+
+if [ -d /root/.docker/cli-plugins ]; then
+    rm -f /root/.docker/cli-plugins/docker-buildx
+    rm -f /root/.docker/cli-plugins/docker-compose
+fi
 
 log "Old Docker Buildx and Compose plugins removed."
 
 
 # ============================================================
-# 10. INSTALL DOCKER BUILDX 0.17.2
+# 10. INSTALL LATEST DOCKER BUILDX
 # ============================================================
 
-section "10. Installing Docker Buildx ${BUILDX_VERSION}"
+section "10. Installing Docker Buildx"
+
+BUILDX_VERSION="$(
+    curl -fsSL \
+    --retry 3 \
+    --retry-delay 2 \
+    https://api.github.com/repos/docker/buildx/releases/latest \
+    | jq -r '.tag_name'
+)"
+
+if [[ -z "$BUILDX_VERSION" || "$BUILDX_VERSION" == "null" ]]; then
+    fail "Could not determine latest Docker Buildx version."
+fi
 
 echo
-echo "Required Buildx version : ${BUILDX_VERSION}"
-echo "Architecture             : ${BUILDX_ARCH}"
+echo "Buildx version : $BUILDX_VERSION"
+echo "Architecture   : $BUILDX_ARCH"
 echo
 
 BUILDX_URL="https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-${BUILDX_ARCH}"
@@ -295,21 +301,36 @@ curl -fL \
 chmod +x "$PLUGIN_DIR/docker-buildx"
 
 if [ ! -x "$PLUGIN_DIR/docker-buildx" ]; then
-    fail "Buildx installation failed."
+    fail "Docker Buildx installation failed."
 fi
 
-log "Docker Buildx ${BUILDX_VERSION} installed."
-
-
-# ============================================================
-# 11. INSTALL DOCKER COMPOSE
-# ============================================================
-
-section "11. Installing Docker Compose ${COMPOSE_VERSION}"
+log "Docker Buildx installed successfully."
 
 echo
-echo "Compose version         : ${COMPOSE_VERSION}"
-echo "Architecture             : ${COMPOSE_ARCH}"
+docker buildx version
+
+
+# ============================================================
+# 11. INSTALL LATEST DOCKER COMPOSE
+# ============================================================
+
+section "11. Installing Docker Compose"
+
+COMPOSE_VERSION="$(
+    curl -fsSL \
+    --retry 3 \
+    --retry-delay 2 \
+    https://api.github.com/repos/docker/compose/releases/latest \
+    | jq -r '.tag_name'
+)"
+
+if [[ -z "$COMPOSE_VERSION" || "$COMPOSE_VERSION" == "null" ]]; then
+    fail "Could not determine latest Docker Compose version."
+fi
+
+echo
+echo "Compose version : $COMPOSE_VERSION"
+echo "Architecture    : $COMPOSE_ARCH"
 echo
 
 COMPOSE_URL="https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-${COMPOSE_ARCH}"
@@ -330,63 +351,17 @@ if [ ! -x "$PLUGIN_DIR/docker-compose" ]; then
     fail "Docker Compose installation failed."
 fi
 
-log "Docker Compose ${COMPOSE_VERSION} installed."
-
-
-# ============================================================
-# 12. VERIFY DOCKER BUILDx VERSION
-# ============================================================
-
-section "12. Verifying Docker Buildx"
-
-BUILDX_OUTPUT="$(docker buildx version)"
-
-echo "$BUILDX_OUTPUT"
-
-# Extract version.
-DETECTED_BUILDX_VERSION="$(
-    echo "$BUILDX_OUTPUT" \
-    | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' \
-    | head -1 \
-    || true
-)"
-
-if [[ -z "$DETECTED_BUILDX_VERSION" ]]; then
-    fail "Could not detect Docker Buildx version."
-fi
+log "Docker Compose installed successfully."
 
 echo
-echo "Detected Buildx version: $DETECTED_BUILDX_VERSION"
-
-# Verify that Buildx is >= 0.17.0.
-if printf '%s\n' "v0.17.0" "$DETECTED_BUILDX_VERSION" \
-    | sort -V -C; then
-
-    log "Buildx version requirement satisfied."
-
-else
-
-    fail "Buildx version $DETECTED_BUILDX_VERSION is older than v0.17.0."
-
-fi
-
-
-# ============================================================
-# 13. VERIFY DOCKER COMPOSE
-# ============================================================
-
-section "13. Verifying Docker Compose"
-
 docker compose version
 
-log "Docker Compose is working."
-
 
 # ============================================================
-# 14. VERIFY DOCKER
+# 12. VERIFY DOCKER
 # ============================================================
 
-section "14. Verifying Docker"
+section "12. Verifying Docker Tools"
 
 echo
 echo "Docker:"
@@ -402,16 +377,23 @@ docker compose version
 
 echo
 echo "Docker Info:"
-docker info >/dev/null
 
-log "Docker + Buildx + Compose are working."
+if docker info >/dev/null 2>&1; then
+
+    log "Docker daemon is responding."
+
+else
+
+    fail "Docker daemon is not responding."
+
+fi
 
 
 # ============================================================
-# 15. CREATE BUILDX BUILDER
+# 13. CREATE BUILDX BUILDER
 # ============================================================
 
-section "15. Configuring Buildx Builder"
+section "13. Configuring Buildx Builder"
 
 if docker buildx inspect shopci-builder >/dev/null 2>&1; then
 
@@ -436,10 +418,10 @@ log "Buildx builder is ready."
 
 
 # ============================================================
-# 16. CHECK AWS CLI
+# 14. CHECK AWS CLI
 # ============================================================
 
-section "16. Checking AWS CLI"
+section "14. Checking AWS CLI"
 
 if command -v aws >/dev/null 2>&1; then
 
@@ -450,12 +432,17 @@ else
     log "AWS CLI is not installed. Installing AWS CLI..."
 
     AWS_ZIP="/tmp/awscliv2.zip"
+    AWS_INSTALL_DIR="/tmp/aws"
 
-    AWS_URL="https://awscli.amazonaws.com/awscli-exe-linux-${AWS_CLI_ARCH}.zip"
+    rm -rf "$AWS_INSTALL_DIR"
+    rm -f "$AWS_ZIP"
+
+    AWS_URL="https://awscli.amazonaws.com/awscli-exe-linux-${AWSCLI_ARCH}.zip"
 
     echo
     echo "Downloading:"
     echo "$AWS_URL"
+    echo
 
     curl -fL \
         --retry 3 \
@@ -463,13 +450,12 @@ else
         "$AWS_URL" \
         -o "$AWS_ZIP"
 
-    rm -rf /tmp/aws
-
     unzip -q "$AWS_ZIP" -d /tmp
 
     /tmp/aws/install --update
 
-    rm -rf "$AWS_ZIP" /tmp/aws
+    rm -rf "$AWS_INSTALL_DIR"
+    rm -f "$AWS_ZIP"
 
     log "AWS CLI installed."
 
@@ -480,33 +466,41 @@ aws --version
 
 
 # ============================================================
-# 17. VERIFY EC2 IAM ROLE
+# 15. VERIFY EC2 IAM ROLE
 # ============================================================
 
-section "17. Checking EC2 IAM Role"
+section "15. Checking EC2 IAM Role"
 
-if aws sts get-caller-identity >/tmp/shopci-identity.json 2>/tmp/shopci-identity-error.log; then
+IDENTITY_FILE="/tmp/shopci-identity.json"
+IDENTITY_ERROR="/tmp/shopci-identity-error.log"
+
+if aws sts get-caller-identity \
+    >"$IDENTITY_FILE" \
+    2>"$IDENTITY_ERROR"; then
 
     log "EC2 IAM Role is working."
 
-    cat /tmp/shopci-identity.json
+    echo
+    cat "$IDENTITY_FILE"
 
 else
 
     warn "AWS CLI is installed, but EC2 IAM Role verification failed."
 
-    cat /tmp/shopci-identity-error.log
+    echo
+    cat "$IDENTITY_ERROR"
 
+    echo
     warn "Make sure an IAM Role is attached to this EC2 instance."
 
 fi
 
 
 # ============================================================
-# 18. INSTALL KUBECTL
+# 16. INSTALL KUBECTL
 # ============================================================
 
-section "18. Installing kubectl"
+section "16. Installing kubectl"
 
 if command -v kubectl >/dev/null 2>&1; then
 
@@ -517,16 +511,31 @@ else
     log "Installing latest stable kubectl..."
 
     KUBECTL_VERSION="$(
-        curl -fsSL https://dl.k8s.io/release/stable.txt
+        curl -fsSL \
+        --retry 3 \
+        --retry-delay 2 \
+        https://dl.k8s.io/release/stable.txt
     )"
 
+    if [[ -z "$KUBECTL_VERSION" ]]; then
+        fail "Could not determine kubectl version."
+    fi
+
     echo
-    echo "kubectl version: $KUBECTL_VERSION"
+    echo "kubectl version : $KUBECTL_VERSION"
+    echo "Architecture    : $KUBECTL_ARCH"
+    echo
+
+    KUBECTL_URL="https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl"
+
+    echo "Downloading:"
+    echo "$KUBECTL_URL"
+    echo
 
     curl -fL \
         --retry 3 \
         --retry-delay 2 \
-        "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl" \
+        "$KUBECTL_URL" \
         -o /usr/local/bin/kubectl
 
     chmod +x /usr/local/bin/kubectl
@@ -540,10 +549,10 @@ kubectl version --client
 
 
 # ============================================================
-# 19. INSTALL EKSCTL
+# 17. INSTALL EKSCTL
 # ============================================================
 
-section "19. Installing eksctl"
+section "17. Installing eksctl"
 
 if command -v eksctl >/dev/null 2>&1; then
 
@@ -555,22 +564,26 @@ else
 
     EKSCTL_VERSION="$(
         curl -fsSL \
+        --retry 3 \
+        --retry-delay 2 \
         https://api.github.com/repos/eksctl-io/eksctl/releases/latest \
         | jq -r '.tag_name'
     )"
 
     if [[ -z "$EKSCTL_VERSION" || "$EKSCTL_VERSION" == "null" ]]; then
-        fail "Could not determine latest eksctl release."
+        fail "Could not determine latest eksctl version."
     fi
 
     echo
-    echo "eksctl version: $EKSCTL_VERSION"
+    echo "eksctl version : $EKSCTL_VERSION"
+    echo "Architecture   : $EKSCTL_ARCH"
+    echo
 
     EKSCTL_URL="https://github.com/eksctl-io/eksctl/releases/download/${EKSCTL_VERSION}/eksctl_Linux_${EKSCTL_ARCH}.tar.gz"
 
-    echo
     echo "Downloading:"
     echo "$EKSCTL_URL"
+    echo
 
     curl -fL \
         --retry 3 \
@@ -595,10 +608,10 @@ eksctl version
 
 
 # ============================================================
-# 20. INSTALL HELM
+# 18. INSTALL HELM
 # ============================================================
 
-section "20. Installing Helm"
+section "18. Installing Helm"
 
 if command -v helm >/dev/null 2>&1; then
 
@@ -610,22 +623,26 @@ else
 
     HELM_VERSION="$(
         curl -fsSL \
+        --retry 3 \
+        --retry-delay 2 \
         https://api.github.com/repos/helm/helm/releases/latest \
         | jq -r '.tag_name'
     )"
 
     if [[ -z "$HELM_VERSION" || "$HELM_VERSION" == "null" ]]; then
-        fail "Could not determine latest Helm release."
+        fail "Could not determine latest Helm version."
     fi
 
     echo
-    echo "Helm version: $HELM_VERSION"
+    echo "Helm version : $HELM_VERSION"
+    echo "Architecture : $HELM_ARCH"
+    echo
 
     HELM_URL="https://get.helm.sh/helm-${HELM_VERSION}-linux-${HELM_ARCH}.tar.gz"
 
-    echo
     echo "Downloading:"
     echo "$HELM_URL"
+    echo
 
     curl -fL \
         --retry 3 \
@@ -644,7 +661,8 @@ else
         "/tmp/helm/linux-${HELM_ARCH}/helm" \
         /usr/local/bin/helm
 
-    rm -rf /tmp/helm /tmp/helm.tar.gz
+    rm -rf /tmp/helm
+    rm -f /tmp/helm.tar.gz
 
     log "Helm installed."
 
@@ -655,10 +673,10 @@ helm version
 
 
 # ============================================================
-# 21. VERIFY KUBERNETES DEVOPS TOOLS
+# 19. VERIFY KUBERNETES TOOLS
 # ============================================================
 
-section "21. Verifying Kubernetes Tools"
+section "19. Verifying Kubernetes Tools"
 
 echo
 echo "kubectl:"
@@ -676,10 +694,10 @@ log "Kubernetes tools are working."
 
 
 # ============================================================
-# 22. GET SHOPCI PROJECT
+# 20. GET SHOPCI PROJECT
 # ============================================================
 
-section "22. Getting ShopCI Source Code"
+section "20. Getting ShopCI Source Code"
 
 if [ -d "$PROJECT_DIR/.git" ]; then
 
@@ -720,10 +738,10 @@ git log -1 --oneline
 
 
 # ============================================================
-# 23. CHECK SHOPCI FILES
+# 21. CHECK SHOPCI FILES
 # ============================================================
 
-section "23. Checking ShopCI Project Files"
+section "21. Checking ShopCI Project Files"
 
 REQUIRED_FILES=(
     "docker-compose.yml"
@@ -735,9 +753,13 @@ REQUIRED_FILES=(
 for FILE in "${REQUIRED_FILES[@]}"; do
 
     if [ -f "$FILE" ]; then
+
         echo "[FOUND] $FILE"
+
     else
+
         fail "Required file missing: $FILE"
+
     fi
 
 done
@@ -746,10 +768,10 @@ log "All required ShopCI files found."
 
 
 # ============================================================
-# 24. CREATE BACKEND ENVIRONMENT
+# 22. CREATE BACKEND ENVIRONMENT
 # ============================================================
 
-section "24. Configuring Backend Environment"
+section "22. Configuring Backend Environment"
 
 mkdir -p "$PROJECT_DIR/backend"
 
@@ -796,10 +818,10 @@ fi
 
 
 # ============================================================
-# 25. VALIDATE DOCKER COMPOSE
+# 23. VALIDATE DOCKER COMPOSE
 # ============================================================
 
-section "25. Validating Docker Compose"
+section "23. Validating Docker Compose"
 
 cd "$PROJECT_DIR"
 
@@ -809,155 +831,179 @@ log "docker-compose.yml is valid."
 
 
 # ============================================================
-# 26. FINAL VERIFICATION
+# 24. FINAL VERIFICATION
 # ============================================================
 
-section "26. FINAL VERIFICATION"
+section "24. FINAL VERIFICATION"
 
 echo
-echo "============================================================"
-echo " Docker"
-echo "============================================================"
+echo "Docker:"
 docker --version
 
 echo
-echo "============================================================"
-echo " Docker Buildx"
-echo "============================================================"
+echo "Docker Buildx:"
 docker buildx version
 
 echo
-echo "============================================================"
-echo " Docker Compose"
-echo "============================================================"
+echo "Docker Compose:"
 docker compose version
 
 echo
-echo "============================================================"
-echo " AWS CLI"
-echo "============================================================"
+echo "AWS CLI:"
 aws --version
 
 echo
-echo "============================================================"
-echo " kubectl"
-echo "============================================================"
+echo "kubectl:"
 kubectl version --client
 
 echo
-echo "============================================================"
-echo " eksctl"
-echo "============================================================"
+echo "eksctl:"
 eksctl version
 
 echo
-echo "============================================================"
-echo " Helm"
-echo "============================================================"
+echo "Helm:"
 helm version
 
 echo
-echo "============================================================"
-echo " Docker Service"
-echo "============================================================"
+echo "Docker Service:"
 systemctl is-active docker
 
 echo
-echo "============================================================"
-echo " EC2 IAM Identity"
-echo "============================================================"
+echo "EC2 IAM Identity:"
 aws sts get-caller-identity
 
 echo
-echo "============================================================"
-echo " Buildx Builders"
-echo "============================================================"
+echo "Buildx Builders:"
 docker buildx ls
 
 echo
-echo "============================================================"
-echo " Project Directory"
-echo "============================================================"
+echo "Project Directory:"
 echo "$PROJECT_DIR"
 
-
-# ============================================================
-# 27. SETUP COMPLETE
-# ============================================================
-
-section "SETUP COMPLETE"
+echo
+echo "Git Branch:"
+git branch --show-current
 
 echo
-echo "ShopCI DevOps Environment Setup Completed Successfully."
-echo
+echo "Latest Commit:"
+git log -1 --oneline
 
-echo "Installed / Verified:"
+
+# ============================================================
+# 25. SETUP COMPLETE
+# ============================================================
+
+section "SHOPCI ENVIRONMENT SETUP COMPLETED"
+
+echo
+echo "Successfully installed / verified:"
+echo
 echo "  [OK] Docker"
-echo "  [OK] Docker Buildx >= 0.17"
+echo "  [OK] Docker Buildx"
 echo "  [OK] Docker Compose"
 echo "  [OK] AWS CLI"
 echo "  [OK] EC2 IAM Role"
 echo "  [OK] kubectl"
 echo "  [OK] eksctl"
 echo "  [OK] Helm"
+echo "  [OK] Git"
 echo "  [OK] ShopCI Source Code"
 echo "  [OK] Docker Compose Configuration"
 echo "  [OK] Backend Environment"
 echo
 
-echo "IMPORTANT:"
-echo "This setup script DOES NOT:"
+echo "============================================================"
+echo " IMPORTANT"
+echo "============================================================"
+echo
+
+echo "This setup.sh ONLY prepares the DevOps environment."
+echo
+echo "It DOES NOT:"
+echo
 echo "  - Build Docker images"
-echo "  - Start ShopCI containers"
+echo "  - Start Docker Compose application"
 echo "  - Deploy ShopCI"
 echo "  - Run docker compose build"
 echo "  - Run docker compose up"
+echo "  - Run docker compose down"
 echo
 
-echo "Next steps must be run manually:"
+echo "============================================================"
+echo " NEXT STEPS"
+echo "============================================================"
+echo
+
+echo "Go to project:"
 echo
 echo "cd $PROJECT_DIR"
 echo
+
+echo "Build manually when ready:"
+echo
 echo "docker compose build"
+echo
+
+echo "Start manually when ready:"
 echo
 echo "docker compose up -d"
 echo
 
-echo "Useful commands:"
+echo "Check containers:"
 echo
 echo "docker compose ps"
+echo
+
+echo "View logs:"
+echo
 echo "docker compose logs -f"
-echo "docker compose restart"
+echo
+
+echo "Stop application:"
+echo
 echo "docker compose down"
 echo
 
 echo "IMPORTANT:"
+echo
 echo "Do NOT run:"
+echo
 echo "docker compose down -v"
+echo
 echo "unless you intentionally want to delete the MySQL volume."
 echo
 
-echo "Kubernetes tools:"
+echo "============================================================"
+echo " KUBERNETES TOOLS READY"
+echo "============================================================"
 echo
+
 echo "kubectl version --client"
 echo "eksctl version"
 echo "helm version"
 echo
 
-echo "AWS IAM:"
+echo "============================================================"
+echo " AWS IAM ROLE READY"
+echo "============================================================"
 echo
+
 echo "aws sts get-caller-identity"
 echo
 
-echo "IMPORTANT:"
-echo "If using ec2-user instead of root, reconnect to"
-echo "EC2 Instance Connect after this script completes so"
-echo "the docker group membership takes effect."
-echo
-
 echo "============================================================"
-echo " SHOPCI SETUP COMPLETED"
+echo " DOCKER ACCESS NOTE"
 echo "============================================================"
 echo
 
-EOF
+echo "ec2-user was added to the docker group."
+
+echo
+echo "If using ec2-user, reconnect to EC2 Instance Connect"
+echo "before running Docker commands as ec2-user."
+
+echo
+echo "============================================================"
+echo " SETUP COMPLETE"
+echo "============================================================"
+echo
