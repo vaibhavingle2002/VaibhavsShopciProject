@@ -12,13 +12,12 @@ echo "        ShopCI - DevOps Environment Setup"
 echo "============================================================"
 
 # ------------------------------------------------------------
-# 1. Root check
+# 1. Root Check
 # ------------------------------------------------------------
 
 if [ "$EUID" -ne 0 ]; then
     echo "ERROR: Please run this script as root."
-    echo "Run:"
-    echo "sudo ./setup.sh"
+    echo "Use: sudo ./setup.sh"
     exit 1
 fi
 
@@ -26,13 +25,13 @@ echo "[OK] Running as root."
 
 
 # ------------------------------------------------------------
-# 2. Detect OS
+# 2. Operating System
 # ------------------------------------------------------------
 
 if [ -f /etc/os-release ]; then
     source /etc/os-release
 else
-    echo "ERROR: /etc/os-release not found."
+    echo "ERROR: Cannot detect operating system."
     exit 1
 fi
 
@@ -40,31 +39,21 @@ echo "[INFO] Operating System: $PRETTY_NAME"
 
 
 # ------------------------------------------------------------
-# 3. Detect architecture
+# 3. Architecture
 # ------------------------------------------------------------
 
 ARCH=$(uname -m)
 
-case "$ARCH" in
-    x86_64)
-        PLATFORM_ARCH="amd64"
-        AWS_ARCH="x86_64"
-        ;;
-    aarch64)
-        PLATFORM_ARCH="arm64"
-        AWS_ARCH="aarch64"
-        ;;
-    *)
-        echo "ERROR: Unsupported architecture: $ARCH"
-        exit 1
-        ;;
-esac
-
 echo "[INFO] Architecture: $ARCH"
+
+if [ "$ARCH" != "x86_64" ]; then
+    echo "ERROR: This setup script is currently designed for x86_64."
+    exit 1
+fi
 
 
 # ------------------------------------------------------------
-# 4. Update system
+# 4. Update System
 # ------------------------------------------------------------
 
 echo ""
@@ -76,7 +65,7 @@ dnf update -y
 
 
 # ------------------------------------------------------------
-# 5. Install required packages
+# 5. Install Required Packages
 # ------------------------------------------------------------
 
 echo ""
@@ -98,7 +87,7 @@ echo "[OK] Required packages installed."
 
 
 # ------------------------------------------------------------
-# 6. Verify curl
+# 6. Check curl
 # ------------------------------------------------------------
 
 echo ""
@@ -122,15 +111,10 @@ echo "Installing Docker..."
 echo "============================================================"
 
 if command -v docker >/dev/null 2>&1; then
-
     echo "[INFO] Docker is already installed."
-
 else
-
     dnf install -y docker
-
-    echo "[OK] Docker package installed."
-
+    echo "[OK] Docker installed."
 fi
 
 systemctl enable --now docker
@@ -139,7 +123,7 @@ echo "[OK] Docker service is running."
 
 
 # ------------------------------------------------------------
-# 8. Configure Docker group
+# 8. Docker Group
 # ------------------------------------------------------------
 
 echo ""
@@ -159,7 +143,7 @@ fi
 
 echo ""
 echo "============================================================"
-echo "Installing Docker Buildx..."
+echo "Checking Docker Buildx..."
 echo "============================================================"
 
 DOCKER_CLI_PLUGIN_DIR="/usr/local/lib/docker/cli-plugins"
@@ -168,27 +152,23 @@ mkdir -p "$DOCKER_CLI_PLUGIN_DIR"
 
 if docker buildx version >/dev/null 2>&1; then
 
-    echo "[OK] Docker Buildx is already available."
+    echo "[OK] Docker Buildx is already installed."
 
 else
 
-    echo "[INFO] Downloading Docker Buildx..."
+    echo "[INFO] Installing Docker Buildx..."
 
-    BUILDX_URL=$(curl -fsSL \
+    BUILDX_VERSION=$(curl -fsSL \
         https://api.github.com/repos/docker/buildx/releases/latest \
-        | jq -r --arg arch "$PLATFORM_ARCH" \
-        '.assets[] | select(.name | test("linux-" + $arch + "$")) | .browser_download_url' \
-        | head -n 1)
+        | jq -r '.tag_name')
 
-    if [ -z "$BUILDX_URL" ] || [ "$BUILDX_URL" = "null" ]; then
-        echo "ERROR: Could not find Docker Buildx download URL."
+    if [ -z "$BUILDX_VERSION" ] || [ "$BUILDX_VERSION" = "null" ]; then
+        echo "ERROR: Could not determine Buildx version."
         exit 1
     fi
 
-    echo "[INFO] Buildx URL found."
-
     curl -fL \
-        "$BUILDX_URL" \
+        "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-amd64" \
         -o "$DOCKER_CLI_PLUGIN_DIR/docker-buildx"
 
     chmod +x "$DOCKER_CLI_PLUGIN_DIR/docker-buildx"
@@ -209,32 +189,25 @@ echo "============================================================"
 
 if docker compose version >/dev/null 2>&1; then
 
-    echo "[OK] Docker Compose is already available."
+    echo "[OK] Docker Compose is already installed."
 
 else
 
-    echo "[INFO] Downloading Docker Compose..."
+    echo "[INFO] Installing Docker Compose..."
 
-    COMPOSE_URL=$(curl -fsSL \
+    COMPOSE_VERSION=$(curl -fsSL \
         https://api.github.com/repos/docker/compose/releases/latest \
-        | jq -r --arg arch "$PLATFORM_ARCH" \
-        '.assets[] | select(.name == ("docker-compose-linux-" + $arch)) | .browser_download_url' \
-        | head -n 1)
+        | jq -r '.tag_name')
 
-    if [ -z "$COMPOSE_URL" ] || [ "$COMPOSE_URL" = "null" ]; then
-        echo "ERROR: Could not find Docker Compose download URL."
-        echo ""
-        echo "Available Docker Compose assets:"
-        curl -fsSL \
-            https://api.github.com/repos/docker/compose/releases/latest \
-            | jq -r '.assets[].name'
+    if [ -z "$COMPOSE_VERSION" ] || [ "$COMPOSE_VERSION" = "null" ]; then
+        echo "ERROR: Could not determine Docker Compose version."
         exit 1
     fi
 
-    echo "[INFO] Compose URL found."
+    echo "[INFO] Compose version: $COMPOSE_VERSION"
 
     curl -fL \
-        "$COMPOSE_URL" \
+        "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64" \
         -o "$DOCKER_CLI_PLUGIN_DIR/docker-compose"
 
     chmod +x "$DOCKER_CLI_PLUGIN_DIR/docker-compose"
@@ -257,7 +230,7 @@ docker compose version
 
 
 # ------------------------------------------------------------
-# 12. Create Buildx builder
+# 12. Create Buildx Builder
 # ------------------------------------------------------------
 
 echo ""
@@ -283,12 +256,12 @@ docker buildx use shopci-builder
 
 
 # ------------------------------------------------------------
-# 13. Install AWS CLI
+# 13. AWS CLI
 # ------------------------------------------------------------
 
 echo ""
 echo "============================================================"
-echo "Installing AWS CLI..."
+echo "Checking AWS CLI..."
 echo "============================================================"
 
 if command -v aws >/dev/null 2>&1; then
@@ -297,14 +270,14 @@ if command -v aws >/dev/null 2>&1; then
 
 else
 
+    echo "[INFO] Installing AWS CLI..."
+
     cd /tmp
 
     rm -rf aws awscliv2.zip
 
-    echo "[INFO] Downloading AWS CLI..."
-
     curl -fL \
-        "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}.zip" \
+        https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip \
         -o awscliv2.zip
 
     unzip -q awscliv2.zip
@@ -333,16 +306,18 @@ if command -v kubectl >/dev/null 2>&1; then
 
 else
 
-    KUBECTL_VERSION=$(curl -fsSL \
-        https://dl.k8s.io/release/stable.txt)
+    echo "[INFO] Downloading kubectl v1.30.0..."
 
-    echo "[INFO] kubectl version: $KUBECTL_VERSION"
+    cd /tmp
 
-    curl -fL \
-        "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${PLATFORM_ARCH}/kubectl" \
-        -o /usr/local/bin/kubectl
+    rm -f kubectl
 
-    chmod +x /usr/local/bin/kubectl
+    curl -fLO \
+        https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl
+
+    chmod +x kubectl
+
+    mv kubectl /usr/local/bin/kubectl
 
     echo "[OK] kubectl installed."
 
@@ -364,32 +339,19 @@ if command -v eksctl >/dev/null 2>&1; then
 
 else
 
-    EKSCTL_VERSION=$(curl -fsSL \
-        https://api.github.com/repos/eksctl-io/eksctl/releases/latest \
-        | jq -r '.tag_name')
-
-    if [ -z "$EKSCTL_VERSION" ] || [ "$EKSCTL_VERSION" = "null" ]; then
-        echo "ERROR: Could not determine eksctl version."
-        exit 1
-    fi
-
-    echo "[INFO] eksctl version: $EKSCTL_VERSION"
+    echo "[INFO] Installing eksctl..."
 
     cd /tmp
 
-    rm -f eksctl.tar.gz eksctl
+    rm -f eksctl.tar.gz
 
-    curl -fL \
-        "https://github.com/eksctl-io/eksctl/releases/download/${EKSCTL_VERSION}/eksctl_${EKSCTL_VERSION#v}_Linux_${PLATFORM_ARCH}.tar.gz" \
-        -o eksctl.tar.gz
-
-    tar -xzf eksctl.tar.gz
+    curl --silent --location \
+        "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" \
+        | tar xz
 
     mv eksctl /usr/local/bin/eksctl
 
     chmod +x /usr/local/bin/eksctl
-
-    rm -f eksctl.tar.gz
 
     echo "[OK] eksctl installed."
 
@@ -411,34 +373,11 @@ if command -v helm >/dev/null 2>&1; then
 
 else
 
-    HELM_VERSION=$(curl -fsSL \
-        https://api.github.com/repos/helm/helm/releases/latest \
-        | jq -r '.tag_name')
+    echo "[INFO] Installing Helm..."
 
-    if [ -z "$HELM_VERSION" ] || [ "$HELM_VERSION" = "null" ]; then
-        echo "ERROR: Could not determine Helm version."
-        exit 1
-    fi
-
-    echo "[INFO] Helm version: $HELM_VERSION"
-
-    cd /tmp
-
-    rm -f helm.tar.gz
-    rm -rf "linux-${PLATFORM_ARCH}"
-
-    curl -fL \
-        "https://get.helm.sh/helm-${HELM_VERSION}-linux-${PLATFORM_ARCH}.tar.gz" \
-        -o helm.tar.gz
-
-    tar -xzf helm.tar.gz
-
-    mv "linux-${PLATFORM_ARCH}/helm" /usr/local/bin/helm
-
-    chmod +x /usr/local/bin/helm
-
-    rm -f helm.tar.gz
-    rm -rf "linux-${PLATFORM_ARCH}"
+    curl -fsSL \
+        https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \
+        | bash
 
     echo "[OK] Helm installed."
 
@@ -446,7 +385,7 @@ fi
 
 
 # ------------------------------------------------------------
-# 17. Final verification
+# 17. Final Verification
 # ------------------------------------------------------------
 
 echo ""
@@ -484,7 +423,19 @@ helm version
 
 
 # ------------------------------------------------------------
-# 18. AWS IAM Role verification
+# 18. Docker Status
+# ------------------------------------------------------------
+
+echo ""
+echo "============================================================"
+echo "Docker Service Status"
+echo "============================================================"
+
+systemctl is-active docker
+
+
+# ------------------------------------------------------------
+# 19. AWS IAM Role Verification
 # ------------------------------------------------------------
 
 echo ""
@@ -500,25 +451,10 @@ if aws sts get-caller-identity >/dev/null 2>&1; then
 
 else
 
-    echo ""
     echo "WARNING: AWS IAM Role could not be verified."
-    echo ""
-    echo "Make sure an IAM Role is attached to this EC2 instance."
-    echo ""
+    echo "Make sure an IAM Role is attached to the EC2 instance."
 
 fi
-
-
-# ------------------------------------------------------------
-# 19. Docker service
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo "Docker Service Status"
-echo "============================================================"
-
-systemctl is-active docker
 
 
 # ------------------------------------------------------------
@@ -531,7 +467,7 @@ echo "        ShopCI Environment Setup Completed"
 echo "============================================================"
 
 echo ""
-echo "Installed successfully:"
+echo "Successfully installed/verified:"
 echo "  [OK] Docker"
 echo "  [OK] Docker Buildx"
 echo "  [OK] Docker Compose"
@@ -543,17 +479,17 @@ echo "  [OK] Helm"
 echo ""
 echo "IMPORTANT:"
 echo "Reconnect to EC2 Instance Connect before using Docker"
-echo "as ec2-user because the user was added to the docker group."
+echo "as ec2-user, because ec2-user was added to the docker group."
 
 echo ""
-echo "After reconnecting run:"
+echo "After reconnecting, verify:"
 echo ""
-echo "  docker ps"
-echo "  docker compose version"
-echo "  aws sts get-caller-identity"
-echo "  kubectl version --client"
-echo "  eksctl version"
-echo "  helm version"
+echo "docker ps"
+echo "docker compose version"
+echo "aws sts get-caller-identity"
+echo "kubectl version --client"
+echo "eksctl version"
+echo "helm version"
 
 echo ""
 echo "============================================================"
