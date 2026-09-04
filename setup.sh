@@ -1,5 +1,3 @@
-[root@Shopci-Project VaibhavsShopciProject]# chmod +x setup.sh
-[root@Shopci-Project VaibhavsShopciProject]# sh setup.sh
 ============================================================
         ShopCI - DevOps Environment Setup
 ============================================================
