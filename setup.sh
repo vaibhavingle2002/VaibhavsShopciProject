@@ -2,94 +2,124 @@
 
 set -Eeuo pipefail
 
+trap 'echo "[ERROR] Script failed at line $LINENO"; exit 1' ERR
+
 # ============================================================
-# SHOPCI - AMAZON LINUX 2023 DOCKER ENVIRONMENT SETUP
+# SHOPCI COMPLETE DOCKER SETUP SCRIPT
+# Amazon Linux 2023
 # ============================================================
 
+PROJECT_DIR="/root/VaibhavsShopciProject"
 REPO_URL="https://github.com/vaibhavingle2002/VaibhavsShopciProject.git"
 BRANCH="master"
-PROJECT_DIR="/root/VaibhavsShopciProject"
 
-PLUGIN_DIR="/usr/local/lib/docker/cli-plugins"
+FRONTEND_IMAGE="shopci-frontend"
+BACKEND_IMAGE="shopci-backend"
 
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-log() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
-
-warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-fail() {
-    echo -e "${RED}[ERROR]${NC} $1"
-    exit 1
-}
-
-section() {
-    echo
-    echo -e "${BLUE}============================================================${NC}"
-    echo -e "${BLUE}$1${NC}"
-    echo -e "${BLUE}============================================================${NC}"
-}
-
-trap 'echo -e "\033[0;31m[ERROR]\033[0m Script failed at line $LINENO"; exit 1' ERR
-
+echo
+echo "============================================================"
+echo "        SHOPCI COMPLETE DOCKER SETUP"
+echo "============================================================"
+echo
 
 # ============================================================
 # 1. ROOT CHECK
 # ============================================================
 
-section "1. Checking User"
-
 if [ "$(id -u)" -ne 0 ]; then
-    fail "Run this script as root."
+    echo "[ERROR] Please run this script as root."
+    exit 1
 fi
 
-echo "Running as: $(whoami)"
-
+echo "[INFO] Running as root."
 
 # ============================================================
 # 2. OS CHECK
 # ============================================================
 
-section "2. Checking Operating System"
-
-if [ ! -f /etc/os-release ]; then
-    fail "/etc/os-release not found."
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+else
+    echo "[ERROR] Cannot detect operating system."
+    exit 1
 fi
 
-source /etc/os-release
+echo "[INFO] Operating System: $PRETTY_NAME"
 
-echo "OS           : ${PRETTY_NAME}"
-echo "Architecture : $(uname -m)"
-
-if [[ "${ID:-}" != "amzn" ]]; then
-    warn "This script is designed for Amazon Linux 2023."
+if [[ "$ID" != "amzn" ]]; then
+    echo "[WARNING] This script is designed for Amazon Linux."
 fi
 
+# ============================================================
+# 3. USER INPUT
+# ============================================================
+
+echo
+echo "============================================================"
+echo "                APPLICATION CREDENTIALS"
+echo "============================================================"
+echo
+
+read -r -p "Enter Docker Hub username: " DOCKERHUB_USERNAME
+
+if [ -z "$DOCKERHUB_USERNAME" ]; then
+    echo "[ERROR] Docker Hub username cannot be empty."
+    exit 1
+fi
+
+# Validate Docker Hub username
+if [[ ! "$DOCKERHUB_USERNAME" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]]; then
+    echo "[ERROR] Invalid Docker Hub username."
+    echo "Use lowercase letters, numbers, ., _, or -."
+    exit 1
+fi
+
+echo
+echo "Docker Hub password/token will be hidden."
+
+read -r -s -p "Enter Docker Hub password/token: " DOCKERHUB_PASSWORD
+echo
+
+if [ -z "$DOCKERHUB_PASSWORD" ]; then
+    echo "[ERROR] Docker Hub password/token cannot be empty."
+    exit 1
+fi
+
+echo
+read -r -s -p "Enter MySQL root password: " MYSQL_ROOT_PASSWORD
+echo
+
+if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
+    echo "[ERROR] MySQL root password cannot be empty."
+    exit 1
+fi
+
+echo
+read -r -s -p "Enter JWT secret: " JWT_SECRET
+echo
+
+if [ -z "$JWT_SECRET" ]; then
+    echo "[ERROR] JWT secret cannot be empty."
+    exit 1
+fi
+
+echo
+echo "[INFO] Credentials received."
 
 # ============================================================
-# 3. UPDATE SYSTEM
+# 4. UPDATE SYSTEM
 # ============================================================
 
-section "3. Updating Amazon Linux"
+echo
+echo "============================================================"
+echo "1. Updating Amazon Linux"
+echo "============================================================"
 
 dnf update -y
 
-log "System update completed."
-
-
-# ============================================================
-# 4. INSTALL REQUIRED UTILITIES
-# ============================================================
-
-section "4. Installing Required Utilities"
+# IMPORTANT:
+# Do NOT install full curl because Amazon Linux 2023
+# provides curl-minimal.
 
 dnf install -y \
     git \
@@ -99,22 +129,66 @@ dnf install -y \
     tar \
     gzip \
     ca-certificates \
-    openssl \
-    curl
+    openssl
+
+if ! command -v curl >/dev/null 2>&1; then
+    echo "[ERROR] curl is not available."
+    exit 1
+fi
+
+echo "[INFO] curl detected: $(curl --version | head -1)"
+
+# ============================================================
+# 5. INSTALL DOCKER
+# ============================================================
 
 echo
-curl --version | head -1
-git --version
-jq --version
+echo "============================================================"
+echo "2. Installing Docker"
+echo "============================================================"
 
-log "Required utilities installed."
+if ! command -v docker >/dev/null 2>&1; then
 
+    echo "[INFO] Docker not found."
+    echo "[INFO] Installing Docker..."
+
+    dnf install -y docker
+
+else
+
+    echo "[INFO] Docker already installed."
+fi
+
+systemctl enable docker
+systemctl start docker
+
+echo "[INFO] Docker service started."
+
+# Add ec2-user to docker group if available
+if id ec2-user >/dev/null 2>&1; then
+    usermod -aG docker ec2-user
+    echo "[INFO] ec2-user added to docker group."
+fi
 
 # ============================================================
-# 5. DETECT CPU ARCHITECTURE
+# 6. DOCKER VERSION
 # ============================================================
 
-section "5. Detecting CPU Architecture"
+echo
+echo "============================================================"
+echo "3. Docker Version"
+echo "============================================================"
+
+docker --version
+
+# ============================================================
+# 7. INSTALL BUILDX
+# ============================================================
+
+echo
+echo "============================================================"
+echo "4. Installing Latest Docker Buildx"
+echo "============================================================"
 
 ARCH="$(uname -m)"
 
@@ -123,255 +197,115 @@ case "$ARCH" in
     x86_64)
         BUILDX_ARCH="amd64"
         COMPOSE_ARCH="x86_64"
-        AWSCLI_ARCH="x86_64"
         ;;
 
     aarch64)
         BUILDX_ARCH="arm64"
         COMPOSE_ARCH="aarch64"
-        AWSCLI_ARCH="aarch64"
-        ;;
-
-    arm64)
-        BUILDX_ARCH="arm64"
-        COMPOSE_ARCH="aarch64"
-        AWSCLI_ARCH="aarch64"
         ;;
 
     *)
-        fail "Unsupported architecture: $ARCH"
+        echo "[ERROR] Unsupported architecture: $ARCH"
+        exit 1
         ;;
 
 esac
 
-echo "System architecture : $ARCH"
-echo "Buildx architecture  : $BUILDX_ARCH"
-echo "Compose architecture : $COMPOSE_ARCH"
-echo "AWS CLI architecture : $AWSCLI_ARCH"
+echo "[INFO] Architecture: $ARCH"
 
+CLI_PLUGIN_DIR="/usr/local/lib/docker/cli-plugins"
 
-# ============================================================
-# 6. INSTALL DOCKER
-# ============================================================
+mkdir -p "$CLI_PLUGIN_DIR"
 
-section "6. Installing Docker"
+# Remove old plugins
+rm -f /usr/libexec/docker/cli-plugins/docker-buildx 2>/dev/null || true
+rm -f /usr/libexec/docker/cli-plugins/docker-compose 2>/dev/null || true
 
-if command -v docker >/dev/null 2>&1; then
+rm -f /root/.docker/cli-plugins/docker-buildx 2>/dev/null || true
+rm -f /root/.docker/cli-plugins/docker-compose 2>/dev/null || true
 
-    log "Docker is already installed."
+rm -f "$CLI_PLUGIN_DIR/docker-buildx" 2>/dev/null || true
+rm -f "$CLI_PLUGIN_DIR/docker-compose" 2>/dev/null || true
 
-else
+# Get latest Buildx
+BUILDX_VERSION="$(curl -fsSL \
+    https://api.github.com/repos/docker/buildx/releases/latest \
+    | jq -r '.tag_name')"
 
-    log "Installing Docker..."
-
-    dnf install -y docker
-
-    log "Docker installed."
-
+if [ -z "$BUILDX_VERSION" ] || [ "$BUILDX_VERSION" = "null" ]; then
+    echo "[ERROR] Could not determine latest Buildx version."
+    exit 1
 fi
 
+echo "[INFO] Latest Buildx: $BUILDX_VERSION"
+
+curl -fL \
+    "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-${BUILDX_ARCH}" \
+    -o "$CLI_PLUGIN_DIR/docker-buildx"
+
+chmod +x "$CLI_PLUGIN_DIR/docker-buildx"
+
+echo "[INFO] Buildx installed."
+
+# ============================================================
+# 8. INSTALL DOCKER COMPOSE
+# ============================================================
+
 echo
+echo "============================================================"
+echo "5. Installing Latest Docker Compose"
+echo "============================================================"
+
+COMPOSE_VERSION="$(curl -fsSL \
+    https://api.github.com/repos/docker/compose/releases/latest \
+    | jq -r '.tag_name')"
+
+if [ -z "$COMPOSE_VERSION" ] || [ "$COMPOSE_VERSION" = "null" ]; then
+    echo "[ERROR] Could not determine latest Docker Compose version."
+    exit 1
+fi
+
+echo "[INFO] Latest Docker Compose: $COMPOSE_VERSION"
+
+curl -fL \
+    "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-${COMPOSE_ARCH}" \
+    -o "$CLI_PLUGIN_DIR/docker-compose"
+
+chmod +x "$CLI_PLUGIN_DIR/docker-compose"
+
+echo "[INFO] Docker Compose installed."
+
+# ============================================================
+# 9. VERIFY DOCKER TOOLS
+# ============================================================
+
+echo
+echo "============================================================"
+echo "6. Verifying Docker Tools"
+echo "============================================================"
+
 docker --version
-
-
-# ============================================================
-# 7. START DOCKER SERVICE
-# ============================================================
-
-section "7. Starting Docker Service"
-
-systemctl enable docker
-systemctl start docker
-
-sleep 3
-
-if systemctl is-active --quiet docker; then
-
-    log "Docker service is running."
-
-else
-
-    systemctl status docker --no-pager
-    fail "Docker service failed to start."
-
-fi
-
-
-# ============================================================
-# 8. CONFIGURE DOCKER GROUP
-# ============================================================
-
-section "8. Configuring Docker Group"
-
-if id ec2-user >/dev/null 2>&1; then
-
-    usermod -aG docker ec2-user
-
-    log "Added ec2-user to docker group."
-
-else
-
-    warn "ec2-user does not exist."
-
-fi
-
-
-# ============================================================
-# 9. PREPARE DOCKER CLI PLUGIN DIRECTORY
-# ============================================================
-
-section "9. Preparing Docker CLI Plugins"
-
-mkdir -p "$PLUGIN_DIR"
-
-log "Docker CLI plugin directory ready."
-
-
-# ============================================================
-# 10. INSTALL DOCKER BUILDX
-# ============================================================
-
-section "10. Installing Docker Buildx"
-
-if docker buildx version >/dev/null 2>&1; then
-
-    log "Docker Buildx is already installed."
-
-else
-
-    log "Installing Docker Buildx..."
-
-    BUILDX_VERSION="$(
-        curl -fsSL \
-        --retry 3 \
-        --retry-delay 2 \
-        https://api.github.com/repos/docker/buildx/releases/latest \
-        | jq -r '.tag_name'
-    )"
-
-    if [[ -z "$BUILDX_VERSION" || "$BUILDX_VERSION" == "null" ]]; then
-        fail "Could not determine latest Docker Buildx version."
-    fi
-
-    echo
-    echo "Buildx version : $BUILDX_VERSION"
-    echo "Architecture   : $BUILDX_ARCH"
-    echo
-
-    BUILDX_URL="https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-${BUILDX_ARCH}"
-
-    echo "Downloading:"
-    echo "$BUILDX_URL"
-
-    curl -fL \
-        --retry 3 \
-        --retry-delay 2 \
-        "$BUILDX_URL" \
-        -o "$PLUGIN_DIR/docker-buildx"
-
-    chmod +x "$PLUGIN_DIR/docker-buildx"
-
-    log "Docker Buildx installed successfully."
-
-fi
-
-echo
 docker buildx version
-
-
-# ============================================================
-# 11. INSTALL DOCKER COMPOSE
-# ============================================================
-
-section "11. Installing Docker Compose"
-
-if docker compose version >/dev/null 2>&1; then
-
-    log "Docker Compose is already installed."
-
-else
-
-    log "Installing Docker Compose..."
-
-    COMPOSE_VERSION="$(
-        curl -fsSL \
-        --retry 3 \
-        --retry-delay 2 \
-        https://api.github.com/repos/docker/compose/releases/latest \
-        | jq -r '.tag_name'
-    )"
-
-    if [[ -z "$COMPOSE_VERSION" || "$COMPOSE_VERSION" == "null" ]]; then
-        fail "Could not determine latest Docker Compose version."
-    fi
-
-    echo
-    echo "Compose version : $COMPOSE_VERSION"
-    echo "Architecture    : $COMPOSE_ARCH"
-    echo
-
-    COMPOSE_URL="https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-${COMPOSE_ARCH}"
-
-    echo "Downloading:"
-    echo "$COMPOSE_URL"
-
-    curl -fL \
-        --retry 3 \
-        --retry-delay 2 \
-        "$COMPOSE_URL" \
-        -o "$PLUGIN_DIR/docker-compose"
-
-    chmod +x "$PLUGIN_DIR/docker-compose"
-
-    log "Docker Compose installed successfully."
-
-fi
-
-echo
-docker compose version
-
-
-# ============================================================
-# 12. VERIFY DOCKER TOOLS
-# ============================================================
-
-section "12. Verifying Docker Tools"
-
-echo
-echo "Docker:"
-docker --version
-
-echo
-echo "Buildx:"
-docker buildx version
-
-echo
-echo "Docker Compose:"
 docker compose version
 
 echo
-echo "Docker Info:"
+echo "[INFO] Docker information:"
+docker info >/dev/null
 
-if docker info >/dev/null 2>&1; then
-
-    log "Docker daemon is responding."
-
-else
-
-    fail "Docker daemon is not responding."
-
-fi
-
+echo "[INFO] Docker is working correctly."
 
 # ============================================================
-# 13. CREATE BUILDX BUILDER
+# 10. CREATE BUILDX BUILDER
 # ============================================================
 
-section "13. Configuring Buildx Builder"
+echo
+echo "============================================================"
+echo "7. Configuring Docker Buildx"
+echo "============================================================"
 
 if docker buildx inspect shopci-builder >/dev/null 2>&1; then
 
-    log "shopci-builder already exists."
+    echo "[INFO] shopci-builder already exists."
 
 else
 
@@ -380,104 +314,26 @@ else
         --driver docker-container \
         --use
 
-    log "shopci-builder created."
-
 fi
 
 docker buildx use shopci-builder
 
 docker buildx inspect --bootstrap
 
-log "Buildx builder is ready."
-
+echo "[INFO] Buildx ready."
 
 # ============================================================
-# 14. CHECK AWS CLI
+# 11. CLONE / UPDATE SHOPCI
 # ============================================================
-
-section "14. Checking AWS CLI"
-
-if command -v aws >/dev/null 2>&1; then
-
-    log "AWS CLI is already installed."
-
-else
-
-    log "AWS CLI is not installed. Installing AWS CLI..."
-
-    AWS_ZIP="/tmp/awscliv2.zip"
-    AWS_INSTALL_DIR="/tmp/aws"
-
-    rm -rf "$AWS_INSTALL_DIR"
-    rm -f "$AWS_ZIP"
-
-    AWS_URL="https://awscli.amazonaws.com/awscli-exe-linux-${AWSCLI_ARCH}.zip"
-
-    echo
-    echo "Downloading:"
-    echo "$AWS_URL"
-
-    curl -fL \
-        --retry 3 \
-        --retry-delay 2 \
-        "$AWS_URL" \
-        -o "$AWS_ZIP"
-
-    unzip -q "$AWS_ZIP" -d /tmp
-
-    /tmp/aws/install --update
-
-    rm -rf "$AWS_INSTALL_DIR"
-    rm -f "$AWS_ZIP"
-
-    log "AWS CLI installed."
-
-fi
 
 echo
-aws --version
-
-
-# ============================================================
-# 15. VERIFY EC2 IAM ROLE
-# ============================================================
-
-section "15. Checking EC2 IAM Role"
-
-IDENTITY_FILE="/tmp/shopci-identity.json"
-IDENTITY_ERROR="/tmp/shopci-identity-error.log"
-
-if aws sts get-caller-identity \
-    >"$IDENTITY_FILE" \
-    2>"$IDENTITY_ERROR"; then
-
-    log "EC2 IAM Role is working."
-
-    echo
-    cat "$IDENTITY_FILE"
-
-else
-
-    warn "AWS CLI is installed, but EC2 IAM Role verification failed."
-
-    echo
-    cat "$IDENTITY_ERROR"
-
-    echo
-    warn "Make sure an IAM Role is attached to this EC2 instance."
-
-fi
-
-
-# ============================================================
-# 16. GET SHOPCI PROJECT
-# ============================================================
-
-section "16. Getting ShopCI Source Code"
+echo "============================================================"
+echo "8. Getting ShopCI Source Code"
+echo "============================================================"
 
 if [ -d "$PROJECT_DIR/.git" ]; then
 
-    log "ShopCI repository already exists."
+    echo "[INFO] Existing ShopCI repository found."
 
     cd "$PROJECT_DIR"
 
@@ -485,14 +341,16 @@ if [ -d "$PROJECT_DIR/.git" ]; then
 
     git checkout "$BRANCH"
 
-    git pull --ff-only origin "$BRANCH"
+    git pull origin "$BRANCH"
 
 else
 
-    log "Cloning ShopCI repository..."
+    echo "[INFO] Cloning ShopCI repository..."
+
+    rm -rf "$PROJECT_DIR"
 
     git clone \
-        --branch "$BRANCH" \
+        -b "$BRANCH" \
         "$REPO_URL" \
         "$PROJECT_DIR"
 
@@ -500,24 +358,17 @@ else
 
 fi
 
-echo
-echo "Project directory:"
-pwd
-
-echo
-echo "Current branch:"
-git branch --show-current
-
-echo
-echo "Latest commit:"
+echo "[INFO] Current commit:"
 git log -1 --oneline
 
-
 # ============================================================
-# 17. CHECK SHOPCI FILES
+# 12. VERIFY PROJECT FILES
 # ============================================================
 
-section "17. Checking ShopCI Project Files"
+echo
+echo "============================================================"
+echo "9. Checking ShopCI Files"
+echo "============================================================"
 
 REQUIRED_FILES=(
     "docker-compose.yml"
@@ -528,223 +379,392 @@ REQUIRED_FILES=(
 
 for FILE in "${REQUIRED_FILES[@]}"; do
 
-    if [ -f "$FILE" ]; then
-
-        echo "[FOUND] $FILE"
-
-    else
-
-        fail "Required file missing: $FILE"
-
+    if [ ! -f "$FILE" ]; then
+        echo "[ERROR] Missing file: $FILE"
+        exit 1
     fi
+
+    echo "[OK] $FILE"
 
 done
 
-log "All required ShopCI files found."
-
-
 # ============================================================
-# 18. CREATE BACKEND ENVIRONMENT
+# 13. CREATE BACKEND ENVIRONMENT FILE
 # ============================================================
 
-section "18. Configuring Backend Environment"
+echo
+echo "============================================================"
+echo "10. Creating Backend Environment"
+echo "============================================================"
 
-mkdir -p "$PROJECT_DIR/backend"
-
-if [ -f "$PROJECT_DIR/backend/.env" ]; then
-
-    warn "backend/.env already exists."
-    warn "Existing .env will NOT be overwritten."
-
-else
-
-    echo
-    echo "ShopCI Backend Configuration"
-    echo "--------------------------------"
-    echo
-
-    read -r -s -p "Enter MySQL root password: " DB_PASSWORD
-    echo
-
-    read -r -s -p "Enter JWT secret: " JWT_SECRET
-    echo
-
-    if [[ -z "$DB_PASSWORD" ]]; then
-        fail "MySQL password cannot be empty."
-    fi
-
-    if [[ -z "$JWT_SECRET" ]]; then
-        fail "JWT secret cannot be empty."
-    fi
-
-    cat > "$PROJECT_DIR/backend/.env" <<ENVEOF
+cat > backend/.env <<EOF
 PORT=5000
 DB_HOST=mysql
 DB_USER=root
-DB_PASSWORD=${DB_PASSWORD}
+DB_PASSWORD=${MYSQL_ROOT_PASSWORD}
 DB_NAME=ecommerce_db
 JWT_SECRET=${JWT_SECRET}
-ENVEOF
+EOF
 
-    chmod 600 "$PROJECT_DIR/backend/.env"
+chmod 600 backend/.env
 
-    log "backend/.env created."
-
-fi
-
+echo "[INFO] backend/.env created."
 
 # ============================================================
-# 19. VALIDATE DOCKER COMPOSE
+# 14. CREATE DOCKER COMPOSE FILE
 # ============================================================
 
-section "19. Validating Docker Compose"
+echo
+echo "============================================================"
+echo "11. Creating Docker Compose Configuration"
+echo "============================================================"
 
-cd "$PROJECT_DIR"
+cat > docker-compose.yml <<EOF
+services:
+
+  mysql:
+    image: mysql:8.0
+    container_name: shopci-mysql
+    restart: unless-stopped
+
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
+      MYSQL_DATABASE: ecommerce_db
+
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+    ports:
+      - "3306:3306"
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "root",
+          "-p${MYSQL_ROOT_PASSWORD}"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    image: ${DOCKERHUB_USERNAME}/shopci-backend:v1
+    container_name: shopci-backend
+    restart: unless-stopped
+
+    env_file:
+      - ./backend/.env
+
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+    ports:
+      - "5000:5000"
+
+  frontend:
+    image: ${DOCKERHUB_USERNAME}/shopci-frontend:v1
+    container_name: shopci-frontend
+    restart: unless-stopped
+
+    depends_on:
+      - backend
+
+    ports:
+      - "3000:80"
+
+volumes:
+  mysql_data:
+EOF
+
+echo "[INFO] docker-compose.yml created."
+
+# ============================================================
+# 15. VALIDATE COMPOSE
+# ============================================================
+
+echo
+echo "============================================================"
+echo "12. Validating Docker Compose"
+echo "============================================================"
 
 docker compose config >/dev/null
 
-log "docker-compose.yml is valid."
-
+echo "[OK] Docker Compose configuration is valid."
 
 # ============================================================
-# 20. FINAL VERIFICATION
+# 16. STOP OLD SHOPCI CONTAINERS
 # ============================================================
-
-section "20. FINAL VERIFICATION"
 
 echo
+echo "============================================================"
+echo "13. Cleaning Old ShopCI Containers"
+echo "============================================================"
+
+docker compose down 2>/dev/null || true
+
+# ============================================================
+# 17. BUILD LOCAL IMAGES
+# ============================================================
+
+echo
+echo "============================================================"
+echo "14. Building ShopCI Frontend and Backend"
+echo "============================================================"
+
+# Build directly from Dockerfiles rather than pulling
+# placeholder images.
+
+docker build \
+    --pull \
+    -t "${DOCKERHUB_USERNAME}/${FRONTEND_IMAGE}:v1" \
+    ./frontend
+
+docker build \
+    --pull \
+    -t "${DOCKERHUB_USERNAME}/${BACKEND_IMAGE}:v1" \
+    ./backend
+
+echo
+echo "[INFO] ShopCI images built successfully."
+
+# ============================================================
+# 18. LOGIN TO DOCKER HUB
+# ============================================================
+
+echo
+echo "============================================================"
+echo "15. Docker Hub Login"
+echo "============================================================"
+
+echo "$DOCKERHUB_PASSWORD" | docker login \
+    --username "$DOCKERHUB_USERNAME" \
+    --password-stdin
+
+echo "[INFO] Docker Hub login successful."
+
+# Clear password variable after login
+unset DOCKERHUB_PASSWORD
+
+# ============================================================
+# 19. PUSH IMAGES
+# ============================================================
+
+echo
+echo "============================================================"
+echo "16. Pushing ShopCI Images to Docker Hub"
+echo "============================================================"
+
+docker push "${DOCKERHUB_USERNAME}/${FRONTEND_IMAGE}:v1"
+
+docker push "${DOCKERHUB_USERNAME}/${BACKEND_IMAGE}:v1"
+
+echo
+echo "[INFO] Images pushed successfully."
+
+# ============================================================
+# 20. START SHOPCI
+# ============================================================
+
+echo
+echo "============================================================"
+echo "17. Starting ShopCI"
+echo "============================================================"
+
+docker compose up -d
+
+echo "[INFO] Containers started."
+
+# ============================================================
+# 21. WAIT FOR MYSQL
+# ============================================================
+
+echo
+echo "============================================================"
+echo "18. Waiting for MySQL"
+echo "============================================================"
+
+for i in {1..30}; do
+
+    if docker exec shopci-mysql \
+        mysqladmin ping \
+        -h localhost \
+        -u root \
+        -p"${MYSQL_ROOT_PASSWORD}" \
+        --silent >/dev/null 2>&1; then
+
+        echo "[OK] MySQL is ready."
+        break
+
+    fi
+
+    echo "[INFO] Waiting for MySQL... ($i/30)"
+    sleep 2
+
+done
+
+# ============================================================
+# 22. DATABASE SETUP
+# ============================================================
+
+echo
+echo "============================================================"
+echo "19. Running ShopCI Database Setup"
+echo "============================================================"
+
+sleep 3
+
+if docker exec shopci-backend npm run setup-db; then
+
+    echo "[OK] Database setup completed."
+
+else
+
+    echo "[WARNING] Database setup command failed."
+    echo "[INFO] Check backend logs:"
+    echo "docker logs shopci-backend"
+
+fi
+
+# ============================================================
+# 23. CONTAINER STATUS
+# ============================================================
+
+echo
+echo "============================================================"
+echo "20. ShopCI Container Status"
+echo "============================================================"
+
+docker compose ps
+
+# ============================================================
+# 24. SHOW IMAGES
+# ============================================================
+
+echo
+echo "============================================================"
+echo "21. ShopCI Docker Images"
+echo "============================================================"
+
+docker images | grep shopci || true
+
+# ============================================================
+# 25. TEST BACKEND
+# ============================================================
+
+echo
+echo "============================================================"
+echo "22. Testing Backend API"
+echo "============================================================"
+
+sleep 5
+
+if curl -fsS \
+    --max-time 10 \
+    http://127.0.0.1:5000/api/products \
+    >/tmp/shopci-backend-test.json 2>/dev/null; then
+
+    echo "[OK] Backend API is working."
+
+else
+
+    echo "[WARNING] Backend API test failed."
+
+    echo
+    echo "Backend logs:"
+    docker logs --tail 50 shopci-backend || true
+
+fi
+
+# ============================================================
+# 26. TEST FRONTEND
+# ============================================================
+
+echo
+echo "============================================================"
+echo "23. Testing Frontend"
+echo "============================================================"
+
+if curl -fsS \
+    --max-time 10 \
+    http://127.0.0.1:3000 \
+    >/tmp/shopci-frontend-test.html 2>/dev/null; then
+
+    echo "[OK] Frontend is working."
+
+else
+
+    echo "[WARNING] Frontend test failed."
+
+    echo
+    echo "Frontend logs:"
+    docker logs --tail 50 shopci-frontend || true
+
+fi
+
+# ============================================================
+# 27. FINAL INFORMATION
+# ============================================================
+
+echo
+echo
+echo "============================================================"
+echo "          SHOPCI DEPLOYMENT COMPLETED"
+echo "============================================================"
+echo
+
 echo "Docker:"
 docker --version
 
 echo
-echo "Docker Buildx:"
+echo "Buildx:"
 docker buildx version
 
 echo
-echo "Docker Compose:"
+echo "Compose:"
 docker compose version
 
 echo
-echo "AWS CLI:"
-aws --version
+echo "Docker Hub:"
+echo "$DOCKERHUB_USERNAME"
 
 echo
-echo "Docker Service:"
-systemctl is-active docker
+echo "Images:"
+echo "  ${DOCKERHUB_USERNAME}/${FRONTEND_IMAGE}:v1"
+echo "  ${DOCKERHUB_USERNAME}/${BACKEND_IMAGE}:v1"
 
 echo
-echo "EC2 IAM Identity:"
-aws sts get-caller-identity
+echo "Containers:"
+docker compose ps
 
 echo
-echo "Buildx Builders:"
-docker buildx ls
+echo "Application:"
+echo "  Frontend: http://<EC2-PUBLIC-IP>:3000"
+echo "  Backend:  http://<EC2-PUBLIC-IP>:5000/api/products"
 
 echo
-echo "Project Directory:"
-echo "$PROJECT_DIR"
+echo "Project:"
+echo "  $PROJECT_DIR"
 
 echo
-echo "Git Branch:"
-git branch --show-current
-
-echo
-echo "Latest Commit:"
-git log -1 --oneline
-
-
-# ============================================================
-# 21. SETUP COMPLETE
-# ============================================================
-
-section "SHOPCI DOCKER ENVIRONMENT SETUP COMPLETED"
-
-echo
-echo "Successfully installed / verified:"
-echo
-echo "  [OK] Docker"
-echo "  [OK] Docker Buildx"
-echo "  [OK] Docker Compose"
-echo "  [OK] AWS CLI"
-echo "  [OK] EC2 IAM Role"
-echo "  [OK] Git"
-echo "  [OK] ShopCI Source Code"
-echo "  [OK] Docker Compose Configuration"
-echo "  [OK] Backend Environment"
-echo
-
 echo "============================================================"
-echo " IMPORTANT"
+echo "IMPORTANT"
 echo "============================================================"
-
-echo
-echo "This setup.sh ONLY prepares the Docker environment."
-echo
-echo "It DOES NOT:"
-echo
-echo "  - Build Docker images"
-echo "  - Start Docker Compose application"
-echo "  - Deploy ShopCI"
-echo "  - Run docker compose build"
-echo "  - Run docker compose up"
-echo "  - Run docker compose down"
-echo
-
-echo "============================================================"
-echo " NEXT STEPS"
-echo "============================================================"
-
-echo
-echo "Go to project:"
-echo
-echo "cd $PROJECT_DIR"
-echo
-
-echo "Build application:"
-echo
-echo "docker compose build"
-echo
-
-echo "Start application:"
-echo
-echo "docker compose up -d"
-echo
-
-echo "Check containers:"
-echo
-echo "docker compose ps"
-echo
-
-echo "View logs:"
-echo
-echo "docker compose logs -f"
-echo
-
-echo "Stop application:"
-echo
-echo "docker compose down"
-echo
-
-echo "IMPORTANT:"
 echo
 echo "Do NOT run:"
-echo
-echo "docker compose down -v"
+echo "  docker compose down -v"
 echo
 echo "unless you intentionally want to delete the MySQL volume."
 echo
-
-echo "============================================================"
-echo " DOCKER ACCESS NOTE"
-echo "============================================================"
-
+echo "MySQL data volume:"
+echo "  mysql_data"
 echo
-echo "ec2-user was added to the docker group."
-echo
-echo "If using ec2-user, reconnect to EC2 Instance Connect"
-echo "before running Docker commands as ec2-user."
-echo
-
 echo "============================================================"
-echo " SETUP COMPLETE"
+echo "[SUCCESS] ShopCI is ready."
 echo "============================================================"
